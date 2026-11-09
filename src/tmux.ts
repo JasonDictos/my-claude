@@ -98,8 +98,18 @@ export function activePeer(): { name: string; repo: string } | null {
   return { name: s.slice(3), repo };
 }
 
-export function splitBelowActive(cmd: string): void {
-  out("tmux", ["split-window", "-v", "-l", "40%", cmd]);
+export function splitBelowActive(cmd: string, title: string): void {
+  const id = out("tmux", ["split-window", "-v", "-l", "40%", "-P", "-F", "#{pane_id}", cmd]).trim();
+  if (id) out("tmux", ["select-pane", "-t", id, "-T", title], { ok: true });
+}
+
+// Every pane of the project's window: peers carry their repo as title, shells "shell:<repo>".
+export function panes(name: string): { id: string; title: string }[] {
+  const lines = out("tmux", ["list-panes", "-t", `${sess(name)}:main`, "-F", "#{pane_id}\t#{pane_title}"], { ok: true });
+  return lines.split("\n").filter(Boolean).map((l) => {
+    const [id, ...t] = l.split("\t");
+    return { id, title: t.join("\t") };
+  });
 }
 
 // The session's status bar: project on its color, peers (lead marked), how to get back.

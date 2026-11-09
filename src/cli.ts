@@ -124,6 +124,7 @@ function main(argv: string[]): number | Promise<number> {
       console.log(`${s.name}: ${s.state}  mode=${s.mode} profile=${s.profile} lead=${s.lead ?? "-"}\ngoal: ${s.goal}`);
       console.log(table([["PEER", "PATH", "ROLE", "MODEL", "STATE", "PANE", "PID", "SESSION"],
         ...s.peers.map((p) => [p.repo, p.path, p.role, p.model ?? "default", p.state, p.pane ?? "-", p.pid ? String(p.pid) : "-", p.session.slice(0, 8)])]));
+      if (s.strays.length) console.log(`stray panes (closed by up): ${s.strays.join(", ")}`);
       return 0;
     }
     case "lead":

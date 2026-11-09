@@ -23,6 +23,7 @@ export interface PeerStatus extends Peer {
 export interface ProjectStatus extends Project {
   state: ProjectState;
   peers: PeerStatus[];
+  strays: string[]; // pane titles in the window that belong to no peer
 }
 export interface ProjectRow {
   name: string;
@@ -199,12 +200,21 @@ export async function addRepo(name: string, line: string, o: { role?: Role; mode
 
 export function rmPeer(name: string, repo: string): string {
   const p = load(name);
-  peerOf(p, repo);
+  const peer = peerOf(p, repo);
   p.peers = p.peers.filter((x) => x.repo !== repo);
   if (p.lead === repo) p.lead = null;
   save(p);
   void syncGroup(p);
   refreshStatus(p);
+  // Its pane (and the claude in it) goes too: the peer is no longer part of the project.
+  if (tmux.sessionUp(name)) {
+    const pane = tmux.paneOf(name, repo);
+    if (pane) {
+      killOccupant(peer.path);
+      tmux.killPane(pane);
+    }
+    closeShellPanes(name, repo);
+  }
   const slot = join(PROJECTS, name, repo);
   const st = lstatSync(slot, { throwIfNoEntry: false });
   if (st?.isSymbolicLink()) {
@@ -319,7 +329,7 @@ export function setColor(name: string, color: string): void {
 
 export interface UpReport {
   repo: string;
-  action: "live" | "starting" | "launched" | "relaunched" | "skipped";
+  action: "live" | "starting" | "launched" | "relaunched" | "skipped" | "closed";
   detail?: string;
 }
 
@@ -345,8 +355,25 @@ export function up(name: string): UpReport[] {
     }
   }
   if (!tmux.sessionUp(name)) die("nothing launched");
+  // Panes for repos that are no longer peers (removed while the session was down, or
+  // a record edited by hand): my-claude made them, my-claude closes them.
+  for (const s of strayPanes(p)) {
+    tmux.killPane(s.id);
+    report.push({ repo: s.title, action: "closed", detail: "no longer a peer" });
+  }
   void syncGroup(p);
   return report;
+}
+
+// Panes in the project window whose title is neither a peer nor a shell on one.
+export function strayPanes(p: Project): { id: string; title: string }[] {
+  if (!tmux.sessionUp(p.name)) return [];
+  const known = new Set(p.peers.flatMap((x) => [x.repo, `shell:${x.repo}`]));
+  return tmux.panes(p.name).filter((x) => !known.has(x.title));
+}
+
+function closeShellPanes(name: string, repo: string): void {
+  for (const x of tmux.panes(name)) if (x.title === `shell:${repo}`) tmux.killPane(x.id);
 }
 
 export function down(name: string): boolean {
@@ -394,6 +421,7 @@ export function status(name: string): ProjectStatus {
       pid: occupantPid(peer.path),
       lock: lockInfo(peer.path),
     })),
+    strays: strayPanes(p).map((x) => x.title),
   };
 }
 
@@ -434,7 +462,7 @@ export function shellHere(): void {
   if (!at) die("not in a my-claude project pane");
   const p = load(at.name);
   peerOf(p, at.repo);
-  tmux.splitBelowActive(`${CLI} _shell ${at.name} ${at.repo}`);
+  tmux.splitBelowActive(`${CLI} _shell ${at.name} ${at.repo}`, `shell:${at.repo}`);
 }
 
 // Runs in the new pane: find the peer's container by its claude's cgroup and exec a shell there.

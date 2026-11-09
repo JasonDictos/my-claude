@@ -358,6 +358,7 @@ function App() {
         <Bar title={status.name} color={projectColor(status.name, status.color).ink} right={`peers group "${status.name}" · ${status.mode === "shared" ? "shared container" : "container per repo"} · ${status.state}`} />
         <Table cols={peerCols} rows={status.peers} sel={psel} width={columns} />
         {status.peers.length === 0 && <Text dimColor>  no peers yet; press a to add a repo</Text>}
+        {status.strays.length > 0 && <Text color="yellow">  stray panes (closed on u): {status.strays.join(", ")}</Text>}
         <Box marginTop={1}><Text> Goal: {status.goal || <Text dimColor>(set with the lead: l)</Text>}</Text></Box>
         <Box flexGrow={1} />
         <Box>{prompt ? <PromptLine prompt={prompt} /> : <Text color={msg.includes("fail") || msg.includes("not") || msg.includes("no ") ? "red" : "green"}> {msg}</Text>}</Box>

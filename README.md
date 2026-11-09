@@ -60,7 +60,9 @@ my-claude up api-overhaul                                 # four panes, four Cla
   *occupied* and is never taken over silently.
 - **`down`** kills the tmux session (containers started by it exit); the records
   and Claude's transcripts stay. **`up`** rebuilds and resumes. After a reboot,
-  same thing.
+  same thing. `up` also closes *stray* panes: ones titled for a repo that is no
+  longer a peer. Remove peers with `x`/`rm`, not tmux's kill-pane, which kills
+  the *active* pane, not the one you're looking at.
 - **Lead + goal.** Nobody leads until you say so. `l` on a peer sets the lead
   and the goal together and briefs everyone through claude-peers: the lead
   gets the goal and the roster, each other peer gets who leads and what for.
@@ -83,7 +85,7 @@ your profile adds.
 
 **Project screen:** `Enter` join (tmux, that peer focused) · `a` add repos
 (several on one line) · `l` lead+goal · `b` resend briefs · `m` model · `c`
-color · `R` relaunch · `u`/`d` · `x` remove peer. Live column: `●` live, `◐`
+color · `R` relaunch · `u`/`d` · `x` remove peer (closes its pane and the Claude in it). Live column: `●` live, `◐`
 starting, `◌ shell` idle (Claude exited, shell still up), `○` down, `!` held
 by a stranger (Enter offers take-over).
 
