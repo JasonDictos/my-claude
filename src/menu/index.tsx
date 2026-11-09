@@ -2,7 +2,6 @@
 // React-for-terminals Claude Code uses). Started by `my-claude` with no args;
 // "Join" exits with a request so the parent can hand the terminal to tmux.
 import { Box, Text, render, useApp, useInput, useStdout } from "ink";
-import TextInput from "ink-text-input";
 import { readdirSync, statSync, watch, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir, hostname } from "node:os";
@@ -28,7 +27,7 @@ const MODELS = ["default", "fable-5.1", "opus-5.5", "sonnet-5.5"];
 const REQUEST = process.env.MY_CLAUDE_REQUEST ?? "";
 
 type Prompt =
-  | { kind: "text" | "path"; label: string; value: string; onSubmit: (v: string) => void; key?: string; hist?: number }
+  | { kind: "text" | "path"; label: string; value: string; onSubmit: (v: string) => void; key?: string; hist?: number; cursor?: number }
   | { kind: "confirm"; label: string; onYes: () => void }
   | { kind: "choice"; label: string; choices: string[]; index: number; onPick: (v: string) => void };
 
@@ -122,7 +121,7 @@ function Keys({ keys }: { keys: [string, string][] }) {
   );
 }
 
-function PromptLine({ prompt, onChange }: { prompt: Prompt; onChange: (v: string) => void }) {
+function PromptLine({ prompt }: { prompt: Prompt }) {
   if (prompt.kind === "confirm") return <Text color="yellow">{prompt.label} [y/N] </Text>;
   if (prompt.kind === "choice")
     return (
@@ -135,15 +134,17 @@ function PromptLine({ prompt, onChange }: { prompt: Prompt; onChange: (v: string
         ))}
       </Box>
     );
-  const ghost = prompt.key ? predict(prompt.value, candidates(prompt.key), prompt.key !== "add") : "";
-  const submit = (v: string) => {
-    if (prompt.key) remember(prompt.key, v);
-    prompt.onSubmit(v);
-  };
+  // Our own line editor: the prompt owns value AND cursor, so ghost accept, history
+  // recall and tab completion all leave the cursor where the text ends.
+  const v = prompt.value;
+  const c = Math.min(prompt.cursor ?? v.length, v.length);
+  const ghost = c === v.length && prompt.key ? predict(v, candidates(prompt.key), prompt.key !== "add") : "";
   return (
     <Box>
       <Text color="yellow">{prompt.label}: </Text>
-      <TextInput value={prompt.value} onChange={onChange} onSubmit={submit} />
+      <Text>{v.slice(0, c)}</Text>
+      <Text inverse>{c < v.length ? v[c] : " "}</Text>
+      <Text>{v.slice(c + 1)}</Text>
       {ghost && <Text dimColor>{ghost}</Text>}
     </Box>
   );
@@ -243,17 +244,39 @@ function App() {
         else if (key.return) { setPrompt(null); prompt.onPick(prompt.choices[prompt.index]); }
         return;
       }
-      const ghost = prompt.key ? predict(prompt.value, candidates(prompt.key), prompt.key !== "add") : "";
-      if ((key.tab || key.rightArrow) && ghost) return setPrompt({ ...prompt, value: prompt.value + ghost, hist: -1 });
-      if (prompt.kind === "path" && key.tab) return setPrompt({ ...prompt, value: completePath(prompt.value) });
+      const v = prompt.value;
+      const c = Math.min(prompt.cursor ?? v.length, v.length);
+      const set = (value: string, cursor = value.length) => setPrompt({ ...prompt, value, cursor, hist: -1 });
+      if (key.return) {
+        setPrompt(null);
+        if (prompt.key) remember(prompt.key, v);
+        return prompt.onSubmit(v);
+      }
+      const ghost = c === v.length && prompt.key ? predict(v, candidates(prompt.key), prompt.key !== "add") : "";
+      if ((key.tab || key.rightArrow) && ghost) return set(v + ghost);
+      if (prompt.kind === "path" && key.tab) return set(completePath(v));
       if ((key.upArrow || key.downArrow) && prompt.key) {
         const h = history(prompt.key);
         if (!h.length) return;
         const cur = prompt.hist ?? -1;
         const next = key.upArrow ? Math.min(cur + 1, h.length - 1) : Math.max(cur - 1, -1);
-        return setPrompt({ ...prompt, value: next < 0 ? "" : h[next], hist: next });
+        const value = next < 0 ? "" : h[next];
+        return setPrompt({ ...prompt, value, cursor: value.length, hist: next });
       }
-      return; // TextInput handles the rest
+      if (key.leftArrow) return set(v, Math.max(0, c - 1));
+      if (key.rightArrow) return set(v, Math.min(v.length, c + 1));
+      if (key.ctrl && input === "a") return set(v, 0);
+      if (key.ctrl && input === "e") return set(v, v.length);
+      if (key.ctrl && input === "u") return set(v.slice(c), 0);
+      if (key.ctrl && input === "k") return set(v.slice(0, c));
+      if (key.ctrl && input === "w") {
+        const head = v.slice(0, c).replace(/\S+\s*$/, "");
+        return set(head + v.slice(c), head.length);
+      }
+      // Ink reports Backspace (DEL) as key.delete; both erase before the cursor.
+      if (key.backspace || key.delete) return c > 0 ? set(v.slice(0, c - 1) + v.slice(c), c - 1) : undefined;
+      if (input && !key.ctrl && !key.meta) return set(v.slice(0, c) + input + v.slice(c), c + input.length);
+      return;
     }
     if (esc || input === "q") {
       if (open) { setOpen(null); setStatus(null); setMsg(""); } else exit();
@@ -276,7 +299,7 @@ function App() {
       } });
       else if (input === "u" && cur) act(() => { core.up(cur.name); }, `${cur.name} up`);
       else if (input === "d" && cur) act(() => { core.down(cur.name); }, `${cur.name} down`);
-      else if ((input === "x" || key.delete) && cur) {
+      else if (input === "x" && cur) {
         const clones = core.clonesOf(cur.name);
         setPrompt({ kind: "confirm", label: clones.length ? `Delete ${cur.name} and move its clones (${clones.join(", ")}) to .trash?` : `Delete project ${cur.name} (conversations stay on disk)?`, onYes: () => act(() => { const d = core.deleteProject(cur.name, true); setMsg(`moved to ${tilde(d)}`); }) });
       }
@@ -315,7 +338,7 @@ function App() {
     else if (input === "c") setPrompt({ kind: "choice", label: "Color", choices: Object.keys(PALETTE), index: Math.max(0, Object.keys(PALETTE).indexOf(status?.color ?? "")), onPick: (color) => act(() => core.setColor(name, color), `${name} is ${color}`) });
     else if (input === "u") act(() => { core.up(name); }, "up");
     else if (input === "d") act(() => { core.down(name); }, "down");
-    else if ((input === "x" || key.delete) && peer) setPrompt({ kind: "confirm", label: `Remove ${peer.repo} from ${name}?`, onYes: () => act(() => { const note = core.rmPeer(name, peer.repo); setMsg(`removed ${peer.repo}${note ? "; " + note : ""}`); }) });
+    else if (input === "x" && peer) setPrompt({ kind: "confirm", label: `Remove ${peer.repo} from ${name}?`, onYes: () => act(() => { const note = core.rmPeer(name, peer.repo); setMsg(`removed ${peer.repo}${note ? "; " + note : ""}`); }) });
   });
 
   const liveMark = (s: string) => (s === "live" ? "●" : s === "occupied" ? "!" : s === "starting" ? "◐" : s === "idle" ? "◌ shell" : "○");
@@ -337,7 +360,7 @@ function App() {
         {status.peers.length === 0 && <Text dimColor>  no peers yet; press a to add a repo</Text>}
         <Box marginTop={1}><Text> Goal: {status.goal || <Text dimColor>(set with the lead: l)</Text>}</Text></Box>
         <Box flexGrow={1} />
-        <Box>{prompt ? <PromptLine prompt={prompt} onChange={(v) => setPrompt({ ...(prompt as any), value: v })} /> : <Text color={msg.includes("fail") || msg.includes("not") || msg.includes("no ") ? "red" : "green"}> {msg}</Text>}</Box>
+        <Box>{prompt ? <PromptLine prompt={prompt} /> : <Text color={msg.includes("fail") || msg.includes("not") || msg.includes("no ") ? "red" : "green"}> {msg}</Text>}</Box>
         <Keys keys={[["Enter", "Join"], ["a", "Add repos"], ["l", "Lead+goal"], ["b", "Brief"], ["m", "Model"], ["c", "Color"], ["R", "Relaunch"], ["u", "Up"], ["d", "Down"], ["x", "Remove"], ["Esc", "Back"]]} />
       </Box>
     );
@@ -358,7 +381,7 @@ function App() {
       {rows.length === 0 && <Text dimColor>  no projects yet; press n</Text>}
       <Box marginTop={1}><Text> Goal: {cur?.goal || <Text dimColor>(none)</Text>}</Text></Box>
       <Box flexGrow={1} />
-      <Box>{prompt ? <PromptLine prompt={prompt} onChange={(v) => setPrompt({ ...(prompt as any), value: v })} /> : <Text color="green"> {msg}</Text>}</Box>
+      <Box>{prompt ? <PromptLine prompt={prompt} /> : <Text color="green"> {msg}</Text>}</Box>
       <Keys keys={[["Enter", "Open"], ["n", "New"], ...ACTIONS.map((a): [string, string] => [a.key === a.key.toUpperCase() && a.key !== a.key.toLowerCase() ? `⇧${a.key.toLowerCase()}` : a.key, a.label]), ["u", "Up"], ["d", "Down"], ["x", "Delete"], ["Esc", "Quit"]]} />
     </Box>
   );
