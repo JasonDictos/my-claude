@@ -1,0 +1,30 @@
+{
+  "name": "my-claude",
+  "private": true,
+  "type": "module",
+  "description": "A project is one long-lived Claude Code session per repo in a tiled tmux session, resumable by id. Ink menu, profiles for your environment.",
+  "bin": {
+    "my-claude": "src/cli.ts"
+  },
+  "scripts": {
+    "test": "tests/smoke.sh",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "ink": "^5.2.1",
+    "ink-text-input": "^6.0.0",
+    "react": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^18.3.12",
+    "bun-types": "^1.3.0",
+    "typescript": "^5.7.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/JasonDictos/my-claude.git"
+  },
+  "license": "MIT",
+  "author": "Jason Dictos"
+}

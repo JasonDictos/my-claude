@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Stand-in for claude in tests: record argv, then idle like a session would.
+echo "$PWD $*" >> "${FAKE_CLAUDE_LOG:?}"
+# Look alive for demos: a prompt line like the real thing.
+printf "\n  \033[2m%s\033[0m\n\n❯ \n" "$PWD"; exec sleep 3600

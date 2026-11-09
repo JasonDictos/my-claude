@@ -1,0 +1,6 @@
+# runtime data: project records live here, not in git
+projects/
+node_modules/
+.history.json
+.cache/
+.trash/
