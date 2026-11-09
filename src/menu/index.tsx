@@ -184,12 +184,20 @@ function App() {
     // from another shell's menu or the CLI shows up here at once.
     const t = setInterval(refresh, 2000);
     let w: ReturnType<typeof watch> | null = null;
+    let pending: ReturnType<typeof setTimeout> | null = null;
     try {
-      w = watch(PROJECTS, { recursive: true }, () => refresh());
+      // Only records matter: a clone into projects/<p>/<repo>/ writes thousands of
+      // files, and redrawing on each one flashes the screen for the whole clone.
+      w = watch(PROJECTS, { recursive: true }, (_e, file) => {
+        const f = String(file ?? "");
+        if (f.split("/").length > 2 && !f.endsWith("project.json")) return;
+        if (pending) return;
+        pending = setTimeout(() => { pending = null; refresh(); }, 150);
+      });
     } catch {
       /* no projects dir yet; polling covers it */
     }
-    return () => { clearInterval(t); w?.close(); };
+    return () => { clearInterval(t); w?.close(); if (pending) clearTimeout(pending); };
   }, []);
 
   const act = (f: () => void, done?: string) => {
