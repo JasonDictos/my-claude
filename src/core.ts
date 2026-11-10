@@ -480,10 +480,22 @@ export function shellPane(name: string, repo: string): number {
 export function launch(name: string, repo: string): number {
   for (;;) {
     const rc = launchOnce(name, repo);
-    console.log(`\nmy-claude: ${repo} exited ${rc}.  Enter: relaunch   q: close pane   (closes by itself in 10 min)`);
-    const key = spawnSync("bash", ["-c", 'read -rsn1 -t 600 k; [ -z "$k" ]'], { stdio: "inherit" }).status;
-    if (key !== 0) return rc;
-    console.log("");
+    for (;;) {
+      console.log(`\nmy-claude: ${repo} exited ${rc}.  Enter: relaunch   s: shell here (host)   q: close pane   (closes by itself in 10 min)`);
+      // 0 = Enter, 2 = s, anything else (q, timeout) closes.
+      const key = spawnSync("bash", ["-c", 'read -rsn1 -t 600 k; case "$k" in "") exit 0;; s) exit 2;; *) exit 1;; esac'], { stdio: "inherit" }).status;
+      if (key === 2) {
+        // The profile failed (a broken dev.sh, a missing image): a plain host shell in the
+        // checkout so the repo is never out of reach. Exit it to get this prompt back.
+        const { path } = peerOf(load(name), repo);
+        console.log(`my-claude: host shell in ${path}; exit to return\n`);
+        spawnSync(process.env.SHELL || "bash", [], { stdio: "inherit", cwd: path, env: { ...process.env, MY_CLAUDE_PROJECT: name, MY_CLAUDE_PEER: repo } });
+        continue;
+      }
+      if (key !== 0) return rc;
+      console.log("");
+      break;
+    }
   }
 }
 

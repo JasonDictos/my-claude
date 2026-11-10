@@ -53,7 +53,9 @@ my-claude up api-overhaul                                 # four panes, four Cla
   each peer through the project's *profile* (see below) as
   `claude --resume <id>` (first time: `--session-id <id>`), inside an
   interactive shell. Exit Claude (double Ctrl-C, `/exit`) and you're at that
-  shell's prompt; `R` in the menu, or `up`, types `claude` back in.
+  shell's prompt; `R` in the menu, or `up`, types `claude` back in. If the
+  profile itself fails (a broken `dev.sh`, a missing image) the pane offers
+  Enter to retry, `s` for a plain host shell in the checkout, `q` to close.
 - **Liveness** is a fact about processes, not records: a peer is *live* when a
   `claude` process has its repo as cwd (compared by device:inode, so container
   and host paths agree). A repo held by a Claude my-claude didn't start is
