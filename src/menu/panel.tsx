@@ -2,11 +2,12 @@
 // Enter switches the client there, Esc hands focus back to the pane you came from,
 // q closes the panel.
 import React, { useEffect, useState } from "react";
-import { Box, Text, render, useApp, useInput, useStdout } from "ink";
+import { Box, Text, render, useApp, useInput } from "ink";
 import * as core from "../core.ts";
 import * as tmux from "../tmux.ts";
 import { projectColor } from "../colors.ts";
 import { candidates, predict, remember } from "./history.ts";
+import { sizeMark, useTermSize } from "./size.ts";
 
 type Row = { name: string; state: string; color: string | null; peers: number };
 
@@ -16,15 +17,7 @@ const stateColor = (s: string) => (s === "UP" ? "green" : s === "PARTIAL" ? "yel
 
 function Panel({ session }: { session: string }) {
   const { exit } = useApp();
-  const { stdout } = useStdout();
-  const [size, setSize] = useState({ width: stdout.columns ?? 30, height: stdout.rows ?? 24 });
-  useEffect(() => {
-    // Ink only erases what it last drew; a shrunken pane keeps the old frame above. Wipe first.
-    const onResize = () => { stdout.write("\x1b[2J\x1b[H"); setSize({ width: stdout.columns ?? 30, height: stdout.rows ?? 24 }); };
-    stdout.on("resize", onResize);
-    return () => { stdout.off("resize", onResize); };
-  }, [stdout]);
-  const { width, height } = size;
+  const { columns: width, rows: height, seq } = useTermSize();
 
   const [list, setList] = useState<Row[]>(() => rows());
   const [sel, setSel] = useState(() => Math.max(0, rows().findIndex((r) => r.name === session)));
@@ -86,7 +79,7 @@ function Panel({ session }: { session: string }) {
   const fit = (s: string, n: number) => (s.length > n ? s.slice(0, Math.max(0, n - 1)) + "…" : s.padEnd(n));
   return (
     <Box flexDirection="column" height={height} width={width} paddingX={1}>
-      <Text bold>projects</Text>
+      <Text bold>projects{sizeMark(seq)}</Text>
       {list.slice(Math.max(0, sel - height + 4), Math.max(0, sel - height + 4) + height - 3).map((r, i) => {
         const idx = i + Math.max(0, sel - height + 4);
         const on = idx === sel;

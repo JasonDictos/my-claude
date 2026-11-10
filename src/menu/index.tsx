@@ -13,6 +13,7 @@ import type { ProfileAction } from "../profiles/types.ts";
 import { PROJECTS, defaultProfile, slug } from "../store.ts";
 import { COLOR_CHOICES, PALETTE, projectColor } from "../colors.ts";
 import { candidates, history, predict, remember } from "./history.ts";
+import { sizeMark, useTermSize } from "./size.ts";
 
 // Actions the default profile adds to the projects screen (e.g. a "New ticket" that files an issue and opens a project).
 const ACTIONS: ProfileAction[] = (() => {
@@ -152,15 +153,7 @@ function PromptLine({ prompt }: { prompt: Prompt }) {
 
 function App() {
   const { exit } = useApp();
-  const { stdout } = useStdout();
-  const [columns, setColumns] = useState(stdout.columns ?? 80);
-  const [lines, setLines] = useState(stdout.rows ?? 24);
-  useEffect(() => {
-    // Ink only erases what it last drew; a shrunken terminal keeps the old frame above. Wipe first.
-    const onResize = () => { stdout.write("\x1b[2J\x1b[H"); setColumns(stdout.columns ?? 80); setLines(stdout.rows ?? 24); };
-    stdout.on("resize", onResize);
-    return () => { stdout.off("resize", onResize); };
-  }, [stdout]);
+  const { columns, rows: lines, seq } = useTermSize();
   const [rows, setRows] = useState<ProjectRow[]>([]);
   const [sel, setSel] = useState(0);
   const [open, setOpen] = useState<string | null>(process.env.MY_CLAUDE_OPEN || null);
@@ -364,7 +357,7 @@ function App() {
     ];
     return (
       <Box flexDirection="column" height={lines}>
-        <Bar title={status.name} color={projectColor(status.name, status.color).ink} right={`peers group "${status.name}" · ${status.mode === "shared" ? "shared container" : "container per repo"} · ${status.state}`} />
+        <Bar title={status.name} color={projectColor(status.name, status.color).ink} right={`peers group "${status.name}" · ${status.mode === "shared" ? "shared container" : "container per repo"} · ${status.state}${sizeMark(seq)}`} />
         <Table cols={peerCols} rows={status.peers} sel={psel} width={columns} />
         {status.peers.length === 0 && <Text dimColor>  no peers yet; press a to add a repo</Text>}
         {status.strays.length > 0 && <Text color="yellow">  stray panes (closed on u): {status.strays.join(", ")}</Text>}
@@ -386,7 +379,7 @@ function App() {
   ];
   return (
     <Box flexDirection="column" height={lines}>
-      <Bar title="my-claude" right={hostname()} />
+      <Bar title="my-claude" right={hostname() + sizeMark(seq)} />
       <Table cols={projCols} rows={rows} sel={sel} width={columns} />
       {rows.length === 0 && <Text dimColor>  no projects yet; press n</Text>}
       <Box marginTop={1}><Text> Goal: {cur?.goal || <Text dimColor>(none)</Text>}</Text></Box>
