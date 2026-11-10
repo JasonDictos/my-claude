@@ -308,9 +308,18 @@ export function deleteProject(name: string, force = false): string {
 function spawn(p: Project, peer: Peer): string {
   const prof = profile(p.profile);
   const env = { MY_CLAUDE_ROOT: ROOT, MY_CLAUDE_PROJECT: p.name, MY_CLAUDE_PEER: peer.repo, ...prof.paneEnv(p.name, peer.repo) };
+  const fresh = !tmux.sessionUp(p.name);
   const pane = tmux.spawnPane(p.name, peer.repo, peer.path, env, `${CLI} _launch ${p.name} ${peer.repo}`);
+  if (fresh && config().panel !== false) tmux.openPanel(p.name, CLI, false);
   refreshStatus(p);
   return pane;
+}
+
+// prefix+`: focus the side panel of the client's project session, opening it if closed.
+export function panel(): void {
+  const s = tmux.currentSession();
+  if (!s?.startsWith("mc-")) die("not in a my-claude project session");
+  tmux.openPanel(s.slice(3), CLI, true);
 }
 
 export const cycle = tmux.cycle;
@@ -368,7 +377,7 @@ export function up(name: string): UpReport[] {
 // Panes in the project window whose title is neither a peer nor a shell on one.
 export function strayPanes(p: Project): { id: string; title: string }[] {
   if (!tmux.sessionUp(p.name)) return [];
-  const known = new Set(p.peers.flatMap((x) => [x.repo, `shell:${x.repo}`]));
+  const known = new Set([tmux.PANEL_TITLE, ...p.peers.flatMap((x) => [x.repo, `shell:${x.repo}`])]);
   return tmux.panes(p.name).filter((x) => !known.has(x.title));
 }
 

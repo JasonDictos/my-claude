@@ -173,10 +173,14 @@ function main(argv: string[]): number | Promise<number> {
       return 0;
     case "panel":
       if (!process.env.TMUX) usage();
-      tmux.panelPopup(core.CLI);
+      core.panel();
       return 0;
     case "_panel":
       return spawnSync(process.execPath, ["run", `${ROOT}/src/menu/panel.tsx`], { stdio: "inherit" }).status ?? 1;
+    case "_tile":
+      if (rest.length !== 1) usage();
+      tmux.tile(rest[0]);
+      return 0;
     case "_shell":
       if (rest.length !== 2) usage();
       return core.shellPane(rest[0], rest[1]);

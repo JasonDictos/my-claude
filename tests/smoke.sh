@@ -13,7 +13,8 @@ ln -s "$here/../src" "$MY_CLAUDE_ROOT/src"; ln -s "$here/../node_modules" "$MY_C
 echo '{"profile":"host","peers":{"cli":"/nonexistent/claude-peers-cli"}}' > "$MY_CLAUDE_ROOT/config.json"
 mc() { bun "$MY_CLAUDE_ROOT/src/cli.ts" "$@"; }
 fail() { echo "FAIL: $*" >&2; exit 1; }
-panes() { tmux list-panes -t mc-smoke:main -F '#{pane_title}' | sort | tr '\n' ' '; }
+panes() { tmux list-panes -t mc-smoke:main -F '#{pane_title}' | grep -v '^my-claude-panel$' | sort | tr '\n' ' '; }
+panel() { tmux list-panes -t mc-smoke:main -F '#{pane_title} #{pane_left} #{pane_width}' | grep '^my-claude-panel '; }
 lines() { [ -f "$FAKE_CLAUDE_LOG" ] && wc -l < "$FAKE_CLAUDE_LOG" || echo 0; }
 wait_log() { for _ in $(seq 75); do [ "$(lines)" -ge "$1" ] && return; sleep 0.2; done; fail "expected $1 launches, log: $(cat "$FAKE_CLAUDE_LOG" 2>/dev/null)"; }
 
@@ -23,6 +24,7 @@ for i in 1 2 3 4; do mc add smoke "$tmp/r$i" >/dev/null; done
 mc up smoke --no-attach >/dev/null
 wait_log 4
 [ "$(panes)" = "r1 r2 r3 r4 " ] || fail "panes: $(panes)"
+[ "$(panel)" = "my-claude-panel 0 30" ] || fail "side panel missing or not a 30-col left column: $(panel)"
 grep -q -- "--session-id" "$FAKE_CLAUDE_LOG" || fail "first launch should use --session-id"
 grep -q -- "--name smoke/r1" "$FAKE_CLAUDE_LOG" || fail "peer name missing"
 st=$(mc ls --json | jq -r '.[0].state'); [[ $st = UP || $st = PARTIAL ]] || fail "ls state after up: '$st'"

@@ -1,5 +1,6 @@
 // One tmux session per project (mc-<name>), one window, one titled pane per peer.
 import { ok, out, run } from "./sh.ts";
+import { layout } from "./layout.ts";
 
 export const sess = (name: string) => `mc-${name}`;
 
@@ -58,12 +59,66 @@ export function spawnPane(name: string, repo: string, cwd: string, env: Record<s
     out("tmux", ["set-option", "-t", s, "pane-border-status", "top"]);
     out("tmux", ["set-option", "-t", s, "pane-border-format", " #{pane_title} "]);
     out("tmux", ["set-option", "-t", s, "allow-set-title", "off"], { ok: true });
-    // A pane that dies (failed launch, exited claude) leaves a hole; keep the grid tiled.
-    out("tmux", ["set-hook", "-t", s, "pane-exited", `select-layout -t ${s}:main tiled`], { ok: true });
   }
   out("tmux", ["select-pane", "-t", pane, "-T", repo]);
-  out("tmux", ["select-layout", "-t", `${s}:main`, "tiled"]);
+  tile(name);
   return pane;
+}
+
+export const PANEL_TITLE = "my-claude-panel";
+
+// Re-layout the project window: panel column left (if open), everything else tiled.
+export function tile(name: string): void {
+  if (name.startsWith("mc-")) name = name.slice(3);
+  const s = sess(name);
+  if (!sessionUp(name)) return;
+  const dims = out("tmux", ["display-message", "-p", "-t", `${s}:main`, "#{window_width} #{window_height}"], { ok: true }).split(" ").map(Number);
+  if (dims.length !== 2 || !dims[0]) return;
+  const all = panes(name);
+  const panel = all.find((p) => p.title === PANEL_TITLE)?.id ?? null;
+  const cells = all.filter((p) => p.title !== PANEL_TITLE).map((p) => p.id);
+  const l = layout(dims[0], dims[1], panel, cells);
+  if (l) out("tmux", ["select-layout", "-t", `${s}:main`, l], { ok: true });
+}
+
+// Hooks that keep the layout ours, server-wide: a pane dying or being killed, a client
+// resizing or moving between sessions re-tiles that session (no-op outside mc-*).
+export function installHooks(cli: string): void {
+  for (const h of ["pane-exited", "after-kill-pane", "client-resized", "client-attached", "client-session-changed"])
+    out("tmux", ["set-hook", "-g", h, `run-shell "${cli} _tile '#{session_name}'"`], { ok: true });
+}
+
+export function panelPane(name: string): string | null {
+  return panes(name).find((p) => p.title === PANEL_TITLE)?.id ?? null;
+}
+
+// Open the side panel in a project session (left column, unfocused unless asked).
+export function openPanel(name: string, cli: string, focus: boolean): string {
+  const s = sess(name);
+  const have = panelPane(name);
+  if (have) {
+    if (focus) out("tmux", ["select-pane", "-t", have], { ok: true });
+    return have;
+  }
+  const first = panes(name)[0]?.id ?? `${s}:main`;
+  const id = out("tmux", ["split-window", "-d", "-hb", "-l", "30", "-P", "-F", "#{pane_id}", "-t", first, "-e", `MY_CLAUDE_PANEL_SESSION=${name}`, `${cli} _panel`]).trim();
+  out("tmux", ["select-pane", "-t", id, "-T", PANEL_TITLE], { ok: true });
+  tile(name);
+  if (focus) out("tmux", ["select-pane", "-t", id], { ok: true });
+  return id;
+}
+
+// The peer pane the user was on before focusing the panel (tmux's "last" pane), else the active one.
+export function focusLast(): void {
+  out("tmux", ["select-pane", "-l"], { ok: true });
+}
+
+export function focusedPeer(name: string): string | null {
+  const lines = out("tmux", ["list-panes", "-t", `${sess(name)}:main`, "-F", "#{pane_active}\t#{pane_last}\t#{pane_title}"], { ok: true }).split("\n");
+  const rows = lines.map((l) => l.split("\t"));
+  const active = rows.find((r) => r[0] === "1");
+  if (active && active[2] !== PANEL_TITLE) return active[2];
+  return rows.find((r) => r[1] === "1" && r[2] !== PANEL_TITLE)?.[2] ?? null;
 }
 
 // Project sessions, in tmux's order.
@@ -88,8 +143,9 @@ function bindCycleKeys(cli: string): void {
   out("tmux", ["bind-key", "BTab", "run-shell", `${cli} prev`], { ok: true });
   // prefix+h: a shell inside the highlighted peer's container, in a pane below it.
   out("tmux", ["bind-key", "h", "run-shell", `${cli} shell-here`], { ok: true });
-  // prefix+`: the side panel (projects and peers, Enter switches).
+  // prefix+`: focus the side panel (opening it if closed).
   out("tmux", ["bind-key", "`", "run-shell", `${cli} panel`], { ok: true });
+  installHooks(cli);
 }
 
 // Move the calling client to a project session, on a given peer's pane if asked.
@@ -101,9 +157,9 @@ export function switchTo(name: string, repo?: string): void {
   out("tmux", ["switch-client", "-t", sess(name)]);
 }
 
-// The side panel as a popup docked on the left edge of the client.
-export function panelPopup(cli: string, width = 34): void {
-  out("tmux", ["display-popup", "-E", "-B", "-x", "0", "-y", "0", "-w", String(width), "-h", "100%", "-e", `MY_CLAUDE_PANEL_W=${width}`, `${cli} _panel`]);
+
+export function currentSession(): string | null {
+  return out("tmux", ["display-message", "-p", "#S"], { ok: true }) || null;
 }
 
 // Project and peer of the client's active pane (session name + pane title), or null outside a project.

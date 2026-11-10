@@ -1,7 +1,8 @@
-// The side panel: a tmux popup docked left listing every project and, for the ones
-// that are up, their peers. Enter switches the client there; Esc/q/` closes.
+// The side panel: a pane docked left in every project session listing every project
+// and, for the ones that are up, their peers. Enter switches the client there, Esc
+// hands focus back to the pane you came from, q closes the panel.
 import React, { useEffect, useState } from "react";
-import { Box, Text, render, useApp, useInput } from "ink";
+import { Box, Text, render, useApp, useInput, useStdout } from "ink";
 import * as core from "../core.ts";
 import * as tmux from "../tmux.ts";
 import { projectColor } from "../colors.ts";
@@ -24,8 +25,17 @@ function rows(): Row[] {
 const mark = (s: string) => (s === "live" ? "●" : s === "occupied" ? "!" : s === "starting" ? "◐" : s === "idle" ? "◌" : "○");
 const markColor = (s: string) => (s === "live" ? "green" : s === "occupied" ? "red" : s === "starting" || s === "idle" ? "yellow" : "gray");
 
-function Panel({ width, height, current }: { width: number; height: number; current: { name: string; repo: string } | null }) {
+function Panel({ session }: { session: string }) {
   const { exit } = useApp();
+  const { stdout } = useStdout();
+  const [size, setSize] = useState({ width: stdout.columns ?? 30, height: stdout.rows ?? 24 });
+  useEffect(() => {
+    const onResize = () => setSize({ width: stdout.columns ?? 30, height: stdout.rows ?? 24 });
+    stdout.on("resize", onResize);
+    return () => { stdout.off("resize", onResize); };
+  }, [stdout]);
+  const { width, height } = size;
+  const [current, setCurrent] = useState<{ name: string; repo: string | null }>(() => ({ name: session, repo: tmux.focusedPeer(session) }));
   const [list, setList] = useState<Row[]>(() => rows());
   const [sel, setSel] = useState(() => {
     const l = rows();
@@ -34,12 +44,13 @@ function Panel({ width, height, current }: { width: number; height: number; curr
   });
   const [msg, setMsg] = useState("");
   useEffect(() => {
-    const t = setInterval(() => setList(rows()), 2000);
+    const t = setInterval(() => { setList(rows()); setCurrent({ name: session, repo: tmux.focusedPeer(session) }); }, 2000);
     return () => clearInterval(t);
   }, []);
 
   useInput((input, key) => {
-    if (key.escape || input === "q" || input === "`" || (key.ctrl && input === "c")) return exit();
+    if (input === "q" || (key.ctrl && input === "c")) return exit();
+    if (key.escape || input === "`") return tmux.focusLast();
     if (key.upArrow) return setSel((s) => Math.max(0, s - 1));
     if (key.downArrow) return setSel((s) => Math.min(list.length - 1, s + 1));
     if (key.return && list[sel]) {
@@ -50,7 +61,7 @@ function Panel({ width, height, current }: { width: number; height: number; curr
           core.up(r.name);
         }
         tmux.switchTo(r.name, r.kind === "peer" ? r.repo : undefined);
-        exit();
+        if (r.name === session && r.kind === "project") tmux.focusLast();
       } catch (e) {
         setMsg(String(e instanceof Error ? e.message : e));
       }
@@ -86,14 +97,13 @@ function Panel({ width, height, current }: { width: number; height: number; curr
         );
       })}
       <Box flexGrow={1} />
-      <Text dimColor>{msg || "↑↓ Enter switch · Esc close"}</Text>
+      <Text dimColor>{msg || "↵ switch  esc back  q close"}</Text>
     </Box>
   );
 }
 
-const width = Number(process.env.MY_CLAUDE_PANEL_W || process.stdout.columns || 34);
-const height = Number(process.stdout.rows || 24);
+const session = process.env.MY_CLAUDE_PANEL_SESSION || tmux.currentSession()?.replace(/^mc-/, "") || "";
 process.stdout.write("\x1b[?1049h\x1b[H\x1b[2J");
-const app = render(<Panel width={width} height={height} current={tmux.activePeer()} />, { exitOnCtrlC: false });
+const app = render(<Panel session={session} />, { exitOnCtrlC: false });
 await app.waitUntilExit();
 process.stdout.write("\x1b[?1049l");

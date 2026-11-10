@@ -97,9 +97,12 @@ Menus open in several terminals stay in sync; the records are watched.
 
 The status bar shows the project on its color and the peers (lead starred).
 
-- **prefix+`** — the side panel: every project with its peers, docked on the
-  left. Up/Down, Enter switches (a down project is brought up first), Esc or
-  ` closes.
+- **The side panel** is the 30-column pane on the left of every project
+  session: every project with its peers, your current ones in bold. It
+  refreshes itself. **prefix+`** focuses it (or reopens it); inside, Up/Down
+  move, Enter switches (a down project is brought up first), Esc goes back to
+  the pane you came from, `q` closes it. `"panel": false` in the config turns
+  it off by default.
 - **prefix+Tab / prefix+Shift+Tab** — next / previous project session.
 - **prefix+h** — a shell *inside the highlighted peer's environment* (for a
   container profile: that exact container, found via the Claude process's
@@ -161,6 +164,7 @@ creation (`--profile`, default from config).
   "profile": "host",
   "clone":   { "defaultOrg": "acme" },
   "peers":   { "cli": "~/claude-peers-mcp/cli.ts" },
+  "panel":   true,
   "docker":  { "anything": "your profile reads via config().docker" }
 }
 ```
@@ -191,7 +195,7 @@ my-claude takeover <p> <repo>           kill a stranger's claude on the repo, la
 my-claude delete <p> [--force]          to .trash/
 my-claude next | prev                   (bound to prefix+Tab / prefix+Shift+Tab)
 my-claude shell-here                    (bound to prefix+h)
-my-claude panel                         (bound to prefix+`)
+my-claude panel                         focus/open the side panel (bound to prefix+`)
 ```
 
 `--shared` puts every peer of a project in **one** container (profile
