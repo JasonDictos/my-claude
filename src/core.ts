@@ -37,7 +37,7 @@ export interface ProjectRow {
   last_used: number; // epoch seconds, 0 = never
 }
 
-const CLI = `${process.execPath} ${ROOT}/src/cli.ts`;
+export const CLI = `${process.execPath} ${ROOT}/src/cli.ts`;
 
 export function newProject(name: string, o: { goal?: string; shared?: boolean; profile?: string; color?: string } = {}): Project {
   if (!NAME_RE.test(name)) die(`bad project name '${name}'`);

@@ -88,6 +88,22 @@ function bindCycleKeys(cli: string): void {
   out("tmux", ["bind-key", "BTab", "run-shell", `${cli} prev`], { ok: true });
   // prefix+h: a shell inside the highlighted peer's container, in a pane below it.
   out("tmux", ["bind-key", "h", "run-shell", `${cli} shell-here`], { ok: true });
+  // prefix+`: the side panel (projects and peers, Enter switches).
+  out("tmux", ["bind-key", "`", "run-shell", `${cli} panel`], { ok: true });
+}
+
+// Move the calling client to a project session, on a given peer's pane if asked.
+export function switchTo(name: string, repo?: string): void {
+  if (repo) {
+    const pane = paneOf(name, repo);
+    if (pane) out("tmux", ["select-pane", "-t", pane], { ok: true });
+  }
+  out("tmux", ["switch-client", "-t", sess(name)]);
+}
+
+// The side panel as a popup docked on the left edge of the client.
+export function panelPopup(cli: string, width = 34): void {
+  out("tmux", ["display-popup", "-E", "-B", "-x", "0", "-y", "0", "-w", String(width), "-h", "100%", "-e", `MY_CLAUDE_PANEL_W=${width}`, `${cli} _panel`]);
 }
 
 // Project and peer of the client's active pane (session name + pane title), or null outside a project.

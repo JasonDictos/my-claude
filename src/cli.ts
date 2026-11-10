@@ -5,6 +5,7 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import * as core from "./core.ts";
+import * as tmux from "./tmux.ts";
 import { ROOT, UsageError, type Role } from "./store.ts";
 
 const USAGE = `usage: my-claude <command> [args]      (no command: interactive menu)
@@ -170,6 +171,12 @@ function main(argv: string[]): number | Promise<number> {
     case "shell-here":
       core.shellHere();
       return 0;
+    case "panel":
+      if (!process.env.TMUX) usage();
+      tmux.panelPopup(core.CLI);
+      return 0;
+    case "_panel":
+      return spawnSync(process.execPath, ["run", `${ROOT}/src/menu/panel.tsx`], { stdio: "inherit" }).status ?? 1;
     case "_shell":
       if (rest.length !== 2) usage();
       return core.shellPane(rest[0], rest[1]);
