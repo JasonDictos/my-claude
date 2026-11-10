@@ -1,7 +1,7 @@
 // The side panel: a pane docked left in every project session listing the projects.
 // Enter switches the client there, Esc hands focus back to the pane you came from,
 // q closes the panel.
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Box, Text, render, useApp, useInput } from "ink";
 import * as core from "../core.ts";
 import * as tmux from "../tmux.ts";
@@ -20,13 +20,16 @@ function Panel({ session }: { session: string }) {
   const { columns: width, rows: height, seq } = useTermSize();
 
   const [list, setList] = useState<Row[]>(() => rows());
+  const listRef = useRef(list); listRef.current = list;
   const [sel, setSel] = useState(() => Math.max(0, rows().findIndex((r) => r.name === session)));
   const [msg, setMsg] = useState("");
   // `a`: add repos to the highlighted project, typed right here (same specs as the menu).
   const [add, setAdd] = useState<{ name: string; value: string; cursor: number } | null>(null);
   useEffect(() => {
     const t = setInterval(() => setList(rows()), 2000);
-    return () => clearInterval(t);
+    // Another panel may have switched the client here with its arrows: show this project highlighted.
+    const snap = setInterval(() => { if (tmux.currentSession() === `mc-${session}`) setSel((s) => { const i = listRef.current.findIndex((r) => r.name === session); return i < 0 ? s : i; }); }, 500);
+    return () => { clearInterval(t); clearInterval(snap); };
   }, []);
 
   useInput((input, key) => {
@@ -58,8 +61,17 @@ function Panel({ session }: { session: string }) {
     if (input === "q" || (key.ctrl && input === "c")) return exit();
     if (input === "a" && list[sel]) return setAdd({ name: list[sel].name, value: "", cursor: 0 });
     if (key.escape || input === "`") return tmux.focusLast();
-    if (key.upArrow) return setSel((s) => Math.max(0, s - 1));
-    if (key.downArrow) return setSel((s) => Math.min(list.length - 1, s + 1));
+    // The highlight IS the view: moving it switches the client to that project's session
+    // (its own panel takes over, highlighting itself). A down project waits for Enter.
+    if (key.upArrow || key.downArrow) {
+      const next = key.upArrow ? Math.max(0, sel - 1) : Math.min(list.length - 1, sel + 1);
+      setSel(next);
+      const r = list[next];
+      if (r && r.state !== "DOWN" && r.name !== session) {
+        try { tmux.switchTo(r.name); tmux.focusPanel(r.name); } catch (e) { setMsg(String(e instanceof Error ? e.message : e)); }
+      }
+      return;
+    }
     if (key.return && list[sel]) {
       const r = list[sel];
       try {
@@ -105,7 +117,7 @@ function Panel({ session }: { session: string }) {
           </Box>
         </Box>
       ) : (
-        <Text dimColor>{msg || "↵ switch  a add  esc back  q close"}</Text>
+        <Text dimColor>{msg || "↑↓ view  ↵ enter  a add  esc back  q close"}</Text>
       )}
     </Box>
   );

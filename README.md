@@ -108,9 +108,10 @@ Four keys cover it; everything else is plain tmux.
 - **The side panel** is the 30-column pane on the left of every project
   session: every project with its peers, your current ones in bold. It
   refreshes itself. **prefix+`** focuses it (or reopens it); inside, Up/Down
-  move, Enter switches (a down project is brought up first), `a` adds repos to
-  the highlighted project (same specs as the menu; a new pane appears if the
-  project is up), Esc goes back to the pane you came from, `q` closes it. `"panel": false` in the config turns
+  *is* the switch: the highlighted project is the one on screen (a down
+  project waits for Enter, which starts it). Enter drops into its panes, `a`
+  adds repos to it (same specs as the menu; the new pane appears at once),
+  Esc goes back to the pane you came from, `q` closes the panel. `"panel": false` in the config turns
   it off by default.
 - **prefix+Tab / prefix+Shift+Tab** — next / previous project session.
 - **prefix+h** — a shell *inside the highlighted peer's environment* (for a

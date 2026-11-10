@@ -109,6 +109,11 @@ export function openPanel(name: string, cli: string, focus: boolean): string {
 }
 
 // The peer pane the user was on before focusing the panel (tmux's "last" pane), else the active one.
+export function focusPanel(name: string): void {
+  const id = panelPane(name);
+  if (id) out("tmux", ["select-pane", "-t", id], { ok: true });
+}
+
 export function focusLast(): void {
   out("tmux", ["select-pane", "-l"], { ok: true });
 }
