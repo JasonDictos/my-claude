@@ -18,7 +18,8 @@ function Panel({ session }: { session: string }) {
   const { stdout } = useStdout();
   const [size, setSize] = useState({ width: stdout.columns ?? 30, height: stdout.rows ?? 24 });
   useEffect(() => {
-    const onResize = () => setSize({ width: stdout.columns ?? 30, height: stdout.rows ?? 24 });
+    // Ink only erases what it last drew; a shrunken pane keeps the old frame above. Wipe first.
+    const onResize = () => { stdout.write("\x1b[2J\x1b[H"); setSize({ width: stdout.columns ?? 30, height: stdout.rows ?? 24 }); };
     stdout.on("resize", onResize);
     return () => { stdout.off("resize", onResize); };
   }, [stdout]);

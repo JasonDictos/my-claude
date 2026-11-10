@@ -156,7 +156,8 @@ function App() {
   const [columns, setColumns] = useState(stdout.columns ?? 80);
   const [lines, setLines] = useState(stdout.rows ?? 24);
   useEffect(() => {
-    const onResize = () => { setColumns(stdout.columns ?? 80); setLines(stdout.rows ?? 24); };
+    // Ink only erases what it last drew; a shrunken terminal keeps the old frame above. Wipe first.
+    const onResize = () => { stdout.write("\x1b[2J\x1b[H"); setColumns(stdout.columns ?? 80); setLines(stdout.rows ?? 24); };
     stdout.on("resize", onResize);
     return () => { stdout.off("resize", onResize); };
   }, [stdout]);
