@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import { basename, join } from "node:path";
 import { containerOf, killOccupant, lockInfo, occupantPid, peerState, projectState, type PeerState, type ProjectState } from "./live.ts";
 import { profile } from "./profiles/index.ts";
+import { homedir } from "node:os";
 import { out, shq, sleep } from "./sh.ts";
 import * as peers from "./peers.ts";
 import {
@@ -481,7 +482,7 @@ export function shellPane(name: string, repo: string): number {
   const peer = peerOf(p, repo);
   const pid = occupantPid(peer.path);
   const container = pid ? containerOf(pid) : null;
-  console.log(`my-claude: shell in ${name}/${repo}${container ? ` (container ${container.slice(0, 12)})` : ""}  ${peer.path}`);
+  console.log(`my-claude: shell in ${name}/${repo}${container ? ` (container ${container.slice(0, 12)})` : ""}  ${peer.path.replace(homedir(), "~")}`);
   return profile(p.profile).shellInto(container, peer.path);
 }
 

@@ -12,9 +12,10 @@ One terminal. Drop in, drop out. Nothing lost.
 
 ![a project session: side panel, one Claude per repo, a shell into a peer](docs/screenshot.png)
 
-A three-repo project. The side panel on the left lists every project; each
-Claude has its repo as a pane; top right is a `prefix+h` shell on the first
-peer; the status bar names the project and its peers (★ = lead).
+A three-repo project. The side panel on the left lists every project (Enter
+switches, `a` adds a repo); each Claude has its repo as a pane; the floating
+pane is a `prefix+h` shell on the first peer; the status bar names the
+project and its peers (★ = lead).
 
 ![the menu](docs/demo/menu.gif)
 
@@ -102,6 +103,7 @@ Menus open in several terminals stay in sync; the records are watched.
 ## Inside the tmux session
 
 The status bar shows the project on its color and the peers (lead starred).
+Four keys cover it; everything else is plain tmux.
 
 - **The side panel** is the 30-column pane on the left of every project
   session: every project with its peers, your current ones in bold. It

@@ -173,7 +173,7 @@ export function activePeer(): { name: string; repo: string } | null {
 // A shell over the grid: a floating pane (tmux 3.8+), else a split below the active pane.
 export function shellOverActive(cmd: string, title: string): void {
   if (floatingPanes()) {
-    out("tmux", ["new-pane", "-T", title, "-x", "80%", "-y", "80%", "-X", "10%", "-Y", "10%", cmd]);
+    out("tmux", ["new-pane", "-T", title, "-x", "60%", "-y", "50%", "-X", "38%", "-Y", "45%", cmd]);
     return;
   }
   const id = out("tmux", ["split-window", "-v", "-l", "40%", "-P", "-F", "#{pane_id}", cmd]).trim();
