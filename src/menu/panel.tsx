@@ -6,6 +6,7 @@ import { Box, Text, render, useApp, useInput, useStdout } from "ink";
 import * as core from "../core.ts";
 import * as tmux from "../tmux.ts";
 import { projectColor } from "../colors.ts";
+import { candidates, predict, remember } from "./history.ts";
 
 type Row = { name: string; state: string; color: string | null; peers: number };
 
@@ -28,13 +29,41 @@ function Panel({ session }: { session: string }) {
   const [list, setList] = useState<Row[]>(() => rows());
   const [sel, setSel] = useState(() => Math.max(0, rows().findIndex((r) => r.name === session)));
   const [msg, setMsg] = useState("");
+  // `a`: add repos to the highlighted project, typed right here (same specs as the menu).
+  const [add, setAdd] = useState<{ name: string; value: string; cursor: number } | null>(null);
   useEffect(() => {
     const t = setInterval(() => setList(rows()), 2000);
     return () => clearInterval(t);
   }, []);
 
   useInput((input, key) => {
+    if (add) {
+      const v = add.value;
+      const c = Math.min(add.cursor, v.length);
+      const set = (value: string, cursor = value.length) => setAdd({ ...add, value, cursor });
+      if (key.escape || (key.ctrl && input === "c")) return setAdd(null);
+      if (key.return) {
+        setAdd(null);
+        if (!v.trim()) return;
+        remember("add", v);
+        setMsg(`adding to ${add.name}...`);
+        core.addRepos(add.name, v, { log: (m) => setMsg(m) })
+          .then((peers) => { setMsg(`added ${peers.map((p) => p.repo).join(", ")}`); setList(rows()); })
+          .catch((e) => setMsg(String(e instanceof Error ? e.message : e)));
+        return;
+      }
+      const ghost = c === v.length ? predict(v, candidates("add"), false) : "";
+      if ((key.tab || key.rightArrow) && ghost) return set(v + ghost);
+      if (key.leftArrow) return set(v, Math.max(0, c - 1));
+      if (key.rightArrow) return set(v, Math.min(v.length, c + 1));
+      if (key.ctrl && input === "u") return set(v.slice(c), 0);
+      if (key.ctrl && input === "w") { const head = v.slice(0, c).replace(/\S+\s*$/, ""); return set(head + v.slice(c), head.length); }
+      if (key.backspace || key.delete) return c > 0 ? set(v.slice(0, c - 1) + v.slice(c), c - 1) : undefined;
+      if (input && !key.ctrl && !key.meta) return set(v.slice(0, c) + input + v.slice(c), c + input.length);
+      return;
+    }
     if (input === "q" || (key.ctrl && input === "c")) return exit();
+    if (input === "a" && list[sel]) return setAdd({ name: list[sel].name, value: "", cursor: 0 });
     if (key.escape || input === "`") return tmux.focusLast();
     if (key.upArrow) return setSel((s) => Math.max(0, s - 1));
     if (key.downArrow) return setSel((s) => Math.min(list.length - 1, s + 1));
@@ -72,7 +101,19 @@ function Panel({ session }: { session: string }) {
         );
       })}
       <Box flexGrow={1} />
-      <Text dimColor>{msg || "↵ switch  esc back  q close"}</Text>
+      {add ? (
+        <Box flexDirection="column">
+          <Text color="yellow">add to {add.name}:</Text>
+          <Box>
+            <Text>{add.value.slice(0, add.cursor)}</Text>
+            <Text inverse>{add.cursor < add.value.length ? add.value[add.cursor] : " "}</Text>
+            <Text>{add.value.slice(add.cursor + 1)}</Text>
+            {add.cursor === add.value.length && <Text dimColor>{predict(add.value, candidates("add"), false)}</Text>}
+          </Box>
+        </Box>
+      ) : (
+        <Text dimColor>{msg || "↵ switch  a add  esc back  q close"}</Text>
+      )}
     </Box>
   );
 }

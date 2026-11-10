@@ -106,8 +106,9 @@ The status bar shows the project on its color and the peers (lead starred).
 - **The side panel** is the 30-column pane on the left of every project
   session: every project with its peers, your current ones in bold. It
   refreshes itself. **prefix+`** focuses it (or reopens it); inside, Up/Down
-  move, Enter switches (a down project is brought up first), Esc goes back to
-  the pane you came from, `q` closes it. `"panel": false` in the config turns
+  move, Enter switches (a down project is brought up first), `a` adds repos to
+  the highlighted project (same specs as the menu; a new pane appears if the
+  project is up), Esc goes back to the pane you came from, `q` closes it. `"panel": false` in the config turns
   it off by default.
 - **prefix+Tab / prefix+Shift+Tab** — next / previous project session.
 - **prefix+h** — a shell *inside the highlighted peer's environment* (for a
