@@ -176,12 +176,13 @@ export function splitBelowActive(cmd: string, title: string): void {
 }
 
 // Every pane of the project's window: peers carry their repo as title, shells "shell:<repo>".
+// tmux 3.8's floating panes (prefix+*) are left out: they belong to no layout.
 export function panes(name: string): { id: string; title: string }[] {
-  const lines = out("tmux", ["list-panes", "-t", `${sess(name)}:main`, "-F", "#{pane_id}\t#{pane_title}"], { ok: true });
+  const lines = out("tmux", ["list-panes", "-t", `${sess(name)}:main`, "-F", "#{pane_floating_flag}\t#{pane_id}\t#{pane_title}"], { ok: true });
   return lines.split("\n").filter(Boolean).map((l) => {
-    const [id, ...t] = l.split("\t");
-    return { id, title: t.join("\t") };
-  });
+    const [fl, id, ...t] = l.split("\t");
+    return fl === "1" ? null : { id, title: t.join("\t") };
+  }).filter((x): x is { id: string; title: string } => x !== null);
 }
 
 // The session's status bar: project on its color, peers (lead marked), how to get back.
