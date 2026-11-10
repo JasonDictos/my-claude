@@ -170,9 +170,23 @@ export function activePeer(): { name: string; repo: string } | null {
   return { name: s.slice(3), repo };
 }
 
-export function splitBelowActive(cmd: string, title: string): void {
+// A shell over the grid: a floating pane (tmux 3.8+), else a split below the active pane.
+export function shellOverActive(cmd: string, title: string): void {
+  if (floatingPanes()) {
+    out("tmux", ["new-pane", "-T", title, "-x", "80%", "-y", "80%", "-X", "10%", "-Y", "10%", cmd]);
+    return;
+  }
   const id = out("tmux", ["split-window", "-v", "-l", "40%", "-P", "-F", "#{pane_id}", cmd]).trim();
   if (id) out("tmux", ["select-pane", "-t", id, "-T", title], { ok: true });
+}
+
+let floating: boolean | null = null;
+function floatingPanes(): boolean {
+  if (floating === null) floating = /^tmux (next-)?(\d+)\.(\d+)/.test(out("tmux", ["-V"], { ok: true })) && (() => {
+    const m = out("tmux", ["-V"], { ok: true }).match(/(\d+)\.(\d+)/)!;
+    return Number(m[1]) > 3 || (Number(m[1]) === 3 && Number(m[2]) >= 8);
+  })();
+  return floating;
 }
 
 // Every pane of the project's window: peers carry their repo as title, shells "shell:<repo>".

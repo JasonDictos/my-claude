@@ -471,7 +471,7 @@ export function shellHere(): void {
   if (!at) die("not in a my-claude project pane");
   const p = load(at.name);
   peerOf(p, at.repo);
-  tmux.splitBelowActive(`${CLI} _shell ${at.name} ${at.repo}`, `shell:${at.repo}`);
+  tmux.shellOverActive(`${CLI} _shell ${at.name} ${at.repo}`, `shell:${at.repo}`);
   tmux.tile(at.name);
 }
 

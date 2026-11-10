@@ -113,7 +113,8 @@ The status bar shows the project on its color and the peers (lead starred).
 - **prefix+Tab / prefix+Shift+Tab** — next / previous project session.
 - **prefix+h** — a shell *inside the highlighted peer's environment* (for a
   container profile: that exact container, found via the Claude process's
-  cgroup), in a pane below.
+  cgroup), as a floating pane over the grid (tmux 3.8+; a split below on
+  older tmux). Exit the shell to close it; tmux's prefix+@ docks it.
 - **prefix+d** — detach; the menu comes back.
 - tmux's own `prefix+z` zooms a pane, `prefix+o` cycles panes.
 
