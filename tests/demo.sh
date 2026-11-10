@@ -6,11 +6,14 @@ here=$(cd "$(dirname "$0")" && pwd); repo=$(cd "$here/.." && pwd)
 out=$repo/docs/demo; mkdir -p "$out"
 tmp=$(mktemp -d); trap 'tmux kill-server 2>/dev/null || true; rm -rf "$tmp"' EXIT
 export TMUX_TMPDIR=$tmp; unset TMUX
-export MY_CLAUDE_ROOT=$tmp/root MY_CLAUDE_CONFIG_DIR=$tmp/cfg MY_CLAUDE_CLAUDE=$here/fake-claude FAKE_CLAUDE_LOG=$tmp/claude.log HOME=$tmp/home
+export MY_CLAUDE_ROOT=$tmp/root MY_CLAUDE_CONFIG_DIR=$tmp/cfg MY_CLAUDE_CLAUDE=$here/fake-claude FAKE_CLAUDE_LOG=$tmp/claude.log FAKE_CLAUDE_SAY=$here/say HOME=$tmp/home
 mkdir -p "$MY_CLAUDE_ROOT" "$MY_CLAUDE_CONFIG_DIR" "$HOME" "$HOME/src"
 ln -s "$repo/src" "$MY_CLAUDE_ROOT/src"; ln -s "$repo/node_modules" "$MY_CLAUDE_ROOT/node_modules"
 echo '{"profile":"host","peers":{"cli":"/nonexistent"}}' > "$MY_CLAUDE_CONFIG_DIR/config.json"
-for r in api web worker docs; do mkdir -p "$HOME/src/$r/.git"; done
+for r in api web worker docs; do
+  mkdir -p "$HOME/src/$r"; git -C "$HOME/src/$r" init -q -b main
+  for m in "scaffold" "wire the v2 client" "review fixes"; do git -C "$HOME/src/$r" -c user.name=demo -c user.email=demo@example.com commit -q --allow-empty -m "$m"; done
+done
 mc() { bun "$MY_CLAUDE_ROOT/src/cli.ts" "$@"; }
 
 # Fixture projects.
@@ -37,6 +40,7 @@ finish() { # name: wait for the recording to end, render the gif
   echo "wrote $out/$name.gif"
 }
 
+if [[ "${1:-}" != "shot" ]]; then
 # Demo 1: the menu. Projects -> open -> add with prediction -> color -> back -> quit.
 record menu 110 26 "env MY_CLAUDE_ROOT=$MY_CLAUDE_ROOT MY_CLAUDE_CONFIG_DIR=$MY_CLAUDE_CONFIG_DIR bun $MY_CLAUDE_ROOT/src/cli.ts"
 sleep 2
@@ -74,3 +78,21 @@ record tmux 110 26 "env -u TMUX MY_CLAUDE_ROOT=$MY_CLAUDE_ROOT MY_CLAUDE_CONFIG_
 sleep 3
 tmux send-keys -t rec C-b d
 finish tmux
+fi
+
+# The screenshot: always, after the gifs (or alone with: tests/demo.sh shot).
+# Screenshot: a project session as it looks in use (docs/screenshot.png): side panel,
+# one Claude per repo, a prefix+h shell on the first peer, the status bar.
+mc new search-rewrite --color purple >/dev/null; mc add search-rewrite ~/src/api >/dev/null
+record shot 200 50 "env -u TMUX MY_CLAUDE_ROOT=$MY_CLAUDE_ROOT MY_CLAUDE_CONFIG_DIR=$MY_CLAUDE_CONFIG_DIR bun $MY_CLAUDE_ROOT/src/cli.ts attach api-overhaul"
+sleep 3
+# the prefix+h shell pane on api: a host shell here, titled like the real one
+tmux send-keys -t rec C-b h; sleep 2
+tmux send-keys -t rec -l 'git --no-pager log --oneline -3'; tmux send-keys -t rec Enter; sleep 1.5
+tmux send-keys -t rec C-b d
+for _ in $(seq 60); do tmux has-session -t rec 2>/dev/null || break; sleep 0.5; done
+agg --theme monokai --font-size 14 --last-frame-duration 1 "$tmp/shot.cast" "$tmp/shot.gif" 2>/dev/null
+# The frame just before the detach is the complete session.
+magick "$tmp/shot.gif" -coalesce "$tmp/frame-%03d.png"
+cp "$(ls "$tmp"/frame-*.png | tail -2 | head -1)" "$repo/docs/screenshot.png"
+echo "wrote $repo/docs/screenshot.png"

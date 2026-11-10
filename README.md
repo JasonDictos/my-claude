@@ -10,6 +10,12 @@ conversations after the containers, the tmux server or the machine die.
 
 One terminal. Drop in, drop out. Nothing lost.
 
+![a project session: side panel, one Claude per repo, a shell into a peer](docs/screenshot.png)
+
+A three-repo project. The side panel on the left lists every project; each
+Claude has its repo as a pane; top right is a `prefix+h` shell on the first
+peer; the status bar names the project and its peers (★ = lead).
+
 ![the menu](docs/demo/menu.gif)
 
 ## Install
@@ -218,7 +224,7 @@ the same terminal UI library Claude Code renders with.
 ```bash
 bun run typecheck
 bun run test          # tests/smoke.sh: host profile, fake claude, private tmux server
-tests/demo.sh         # re-record docs/demo/*.gif (asciinema + agg)
+tests/demo.sh         # re-record docs/demo/*.gif and docs/screenshot.png (asciinema + agg + imagemagick)
 ```
 
 Layout: `src/cli.ts` (commands + menu loop) · `src/core.ts` (operations) ·

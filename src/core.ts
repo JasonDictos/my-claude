@@ -472,6 +472,7 @@ export function shellHere(): void {
   const p = load(at.name);
   peerOf(p, at.repo);
   tmux.splitBelowActive(`${CLI} _shell ${at.name} ${at.repo}`, `shell:${at.repo}`);
+  tmux.tile(at.name);
 }
 
 // Runs in the new pane: find the peer's container by its claude's cgroup and exec a shell there.

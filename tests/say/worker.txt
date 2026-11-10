@@ -1,0 +1,12 @@
+● Cut the job runner over to /v2/jobs. Batch size and backoff are unchanged.
+
+  1. Empty body hang: the client could wait forever on a request with no body,
+     because two checks disagreed about what "empty" meant. Both agree now.
+  2. Misreported network errors: a refused connection exits with a clear error
+     instead of claiming the job "did not stick".
+  3. Possible KeyError: the field lookup now uses .get() with a default.
+
+  Still no end-to-end run against staging; all tests used the fake server.
+
+  Still open: the deploy manifest pins the old image tag. Want me to bump it
+  in this PR or leave it for the release?

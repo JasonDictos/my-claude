@@ -11,6 +11,7 @@ export type PeerState = "live" | "starting" | "idle" | "down" | "occupied";
 const STARTING_GRACE_S = 180;
 export type ProjectState = "UP" | "DOWN" | "PARTIAL";
 
+const STUB = process.env.MY_CLAUDE_CLAUDE || "";
 const EXE_RE = /\/\.local\/(share\/claude\/versions\/|bin\/claude$)/;
 
 // Every Claude process on this directory (a session with subagents is several).
@@ -28,10 +29,12 @@ export function occupantPids(path: string): number[] {
     if (!/^\d+$/.test(d)) continue;
     try {
       if (statSync(`/proc/${d}`).uid !== uid) continue;
-      if (!EXE_RE.test(readlinkSync(`/proc/${d}/exe`))) continue;
+      const exe = readlinkSync(`/proc/${d}/exe`);
+      const cmd = " " + readFileSync(`/proc/${d}/cmdline`, "utf8").replaceAll("\0", " ");
+      // Tests and demos run a stand-in script (MY_CLAUDE_CLAUDE); it shows up by path on the command line.
+      if (!EXE_RE.test(exe) && !(STUB && cmd.includes(STUB))) continue;
       const cwd = statSync(`/proc/${d}/cwd`);
       if (Number(cwd.dev) !== want.dev || Number(cwd.ino) !== want.ino) continue;
-      const cmd = " " + readFileSync(`/proc/${d}/cmdline`, "utf8").replaceAll("\0", " ");
       if (cmd.includes(" daemon ") || cmd.includes(" bg-pty-host ")) continue;
       pids.push(Number(d));
     } catch {
