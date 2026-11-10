@@ -77,6 +77,12 @@ function Panel({ session }: { session: string }) {
 }
 
 const session = process.env.MY_CLAUDE_PANEL_SESSION || tmux.currentSession()?.replace(/^mc-/, "") || "";
+
+// Never outlive the terminal: a pane killed or replaced (respawn-pane) sends HUP and
+// closes the pty; without this the process spins on a dead stdin/stdout.
+const bail = () => { try { process.stdout.write("\x1b[?1049l"); } catch { /* gone */ } process.exit(0); };
+for (const sig of ["SIGHUP", "SIGTERM"] as const) process.on(sig, bail);
+process.stdin.on("end", bail); process.stdin.on("error", bail); process.stdout.on("error", bail);
 process.stdout.write("\x1b[?1049h\x1b[H\x1b[2J");
 const app = render(<Panel session={session} />, { exitOnCtrlC: false });
 await app.waitUntilExit();

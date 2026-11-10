@@ -397,6 +397,11 @@ function App() {
 }
 
 // Alternate screen: the menu owns the whole terminal and leaves no scrollback behind.
+// Never outlive the terminal: a pane killed or replaced (respawn-pane) sends HUP and
+// closes the pty; without this the process spins on a dead stdin/stdout.
+const bail = () => { try { process.stdout.write("\x1b[?1049l"); } catch { /* gone */ } process.exit(0); };
+for (const sig of ["SIGHUP", "SIGTERM"] as const) process.on(sig, bail);
+process.stdin.on("end", bail); process.stdin.on("error", bail); process.stdout.on("error", bail);
 process.stdout.write("\x1b[?1049h\x1b[H");
 const app = render(<App />, { exitOnCtrlC: false });
 app.waitUntilExit().finally(() => process.stdout.write("\x1b[?1049l"));
