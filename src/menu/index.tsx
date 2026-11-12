@@ -177,21 +177,31 @@ function App() {
     // Poll for liveness (tmux/process state) and watch the records so a change made
     // from another shell's menu or the CLI shows up here at once.
     const t = setInterval(refresh, 2000);
-    let w: ReturnType<typeof watch> | null = null;
+    // Only the records matter, so only projects/ and each projects/<name>/ are watched,
+    // flat. A recursive watch would cover every clone and build tree: thousands of
+    // inotify watches, a redraw storm during a clone, and a crash the moment a build
+    // run as root creates a directory this user may not watch.
+    const watchers = new Map<string, ReturnType<typeof watch>>();
     let pending: ReturnType<typeof setTimeout> | null = null;
-    try {
-      // Only records matter: a clone into projects/<p>/<repo>/ writes thousands of
-      // files, and redrawing on each one flashes the screen for the whole clone.
-      w = watch(PROJECTS, { recursive: true }, (_e, file) => {
-        const f = String(file ?? "");
-        if (f.split("/").length > 2 && !f.endsWith("project.json")) return;
-        if (pending) return;
-        pending = setTimeout(() => { pending = null; refresh(); }, 150);
-      });
-    } catch {
-      /* no projects dir yet; polling covers it */
-    }
-    return () => { clearInterval(t); w?.close(); if (pending) clearTimeout(pending); };
+    const changed = () => { if (!pending) pending = setTimeout(() => { pending = null; refresh(); rearm(); }, 150); };
+    const arm = (dir: string) => {
+      if (watchers.has(dir)) return;
+      try {
+        const w = watch(dir, changed);
+        w.on("error", () => { w.close(); watchers.delete(dir); }); // gone or unreadable: polling covers it
+        watchers.set(dir, w);
+      } catch { /* not there yet; polling covers it */ }
+    };
+    const rearm = () => {
+      arm(PROJECTS);
+      let names: string[] = [];
+      try { names = readdirSync(PROJECTS); } catch { /* no projects dir yet */ }
+      const want = new Set([PROJECTS, ...names.map((n) => join(PROJECTS, n))]);
+      for (const [dir, w] of watchers) if (!want.has(dir)) { w.close(); watchers.delete(dir); }
+      for (const dir of want) arm(dir);
+    };
+    rearm();
+    return () => { clearInterval(t); for (const w of watchers.values()) w.close(); if (pending) clearTimeout(pending); };
   }, []);
 
   const act = (f: () => void, done?: string) => {
