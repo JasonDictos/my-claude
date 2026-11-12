@@ -496,6 +496,7 @@ export function projectBrief(p: Project, peer: Peer): string {
     p.lead ? (peer.repo === p.lead ? "You own the outcome: coordinate the work across repos." : `${p.lead} leads; take direction from them.`) : "Nobody leads yet; coordinate as equals.",
     p.goal ? `Goal: ${p.goal}` : "",
     `Everyone is in the claude-peers group "${p.name}": message the group to reach all of them, or a peer by its repo name or path. When your work touches another repo, or you need something from it, talk to that session instead of guessing or editing it yourself; tell the group when you change an interface others build against.`,
+    `The project is the tmux session "${tmux.sess(p.name)}", window "main", one pane per session titled with its repo name (yours: "${peer.repo}"); a shell the user opened beside a peer is titled "shell:<repo>", and "${tmux.PANEL_TITLE}" is the project list. You can read any pane, e.g. when asked what another peer or a build shell is showing: find it with \`tmux list-panes -t ${tmux.sess(p.name)}:main -F '#{pane_id} #{pane_title}'\`, then \`tmux capture-pane -p -J -S -200 -t <pane_id>\` (reading only; do not type into another pane).`,
   ];
   return lines.filter(Boolean).join("\n");
 }

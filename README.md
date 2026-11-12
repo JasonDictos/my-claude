@@ -222,7 +222,8 @@ permitting) so they share build state; the default is one per repo.
   recorded when it was added.
 - Every peer's Claude starts knowing the project: its own repo, the other
   sessions and their paths, who leads, the goal, and the claude-peers group that
-  reaches them all (`--append-system-prompt`). Claude Code snapshots that per
+  reaches them all, and the tmux session and pane titles so it can read another
+  peer's or a shell's screen when asked (`--append-system-prompt`). Claude Code snapshots that per
   conversation, so later roster changes and `lead` briefs arrive as peer messages.
 - `up` never kills a Claude it didn't start; take-over is explicit.
 - Error messages never echo command lines (pane environments carry tokens).
