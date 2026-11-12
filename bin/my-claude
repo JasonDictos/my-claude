@@ -1,0 +1,8 @@
+#!/bin/sh
+# my-claude entry point usable everywhere: bun on the source when bun is around (the
+# host), else the compiled binary (dev containers, where only the home dir is shared).
+root=$(cd "$(dirname "$0")/.." && pwd)
+export MY_CLAUDE_ROOT="${MY_CLAUDE_ROOT:-$root}"
+if command -v bun >/dev/null 2>&1; then exec bun "$root/src/cli.ts" "$@"; fi
+[ -x "$root/dist/my-claude" ] || { echo "my-claude: no bun here and no $root/dist/my-claude (run 'bun run build' on the host)" >&2; exit 127; }
+exec "$root/dist/my-claude" "$@"

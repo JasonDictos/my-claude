@@ -27,6 +27,8 @@ const USAGE = `usage: my-claude <command> [args]      (no command: interactive m
   takeover <project> <repo>      kill the stranger occupying the repo, launch the peer
   delete <project> [--force]     down + move the project dir to .trash/ (conversations kept)
   undelete [<project>]           bring a deleted project back (same paths, same conversations); no arg lists .trash/
+  mcp                            MCP server on stdio (start_project, add_repos, list_projects, project_status); injected into every peer
+  build                          compile dist/my-claude, what dev containers run (done automatically when a project starts)
   next | prev                    inside tmux: switch to the next/previous project session (also prefix+Tab / prefix+Shift+Tab)
   shell-here                     inside a project pane: a shell in that peer's container, in a pane below (also prefix+h)`;
 
@@ -162,6 +164,11 @@ function main(argv: string[]): number | Promise<number> {
     case "delete":
       if (rest.length < 1 || rest.length > 2) usage();
       console.log(`deleted ${rest[0]} -> ${core.deleteProject(rest[0], rest[1] === "--force")} (conversations kept on disk)`);
+      return 0;
+    case "mcp":
+      return import("./mcp.ts").then((m) => m.serve());
+    case "build":
+      console.log(core.ensureBinary() ?? "dist/my-claude is current");
       return 0;
     case "undelete": {
       if (rest.length > 1) usage();

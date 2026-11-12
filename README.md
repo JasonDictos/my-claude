@@ -213,6 +213,20 @@ my-claude panel                         focus/open the side panel (bound to pref
 `--shared` puts every peer of a project in **one** container (profile
 permitting) so they share build state; the default is one per repo.
 
+## Peers can start projects
+
+Every peer's Claude gets a my-claude MCP server (`--mcp-config`, served by
+`bin/my-claude mcp`). Its tools: `start_project` (name, repos, a written work
+order; the lead gets it as goal and first prompt and starts at once),
+`add_repos`, `list_projects`, `project_status`. The brief tells them to use
+`start_project` instead of subagents when work deserves sessions of its own:
+the result is durable, shows in the side panel, and the new lead knows which
+session started it and reports back through claude-peers.
+
+Inside a dev container there is no bun, so `bin/my-claude` runs the compiled
+`dist/my-claude` there (`bun run build`; a project start rebuilds it when the
+source is newer).
+
 ## Safety notes
 
 - Deleting goes to `~/my-claude/.trash/<timestamp>-<name>/`. A fresh clone can

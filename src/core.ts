@@ -9,13 +9,14 @@ import { homedir } from "node:os";
 import { out, shq, sleep } from "./sh.ts";
 import * as peers from "./peers.ts";
 import {
-  NAME_RE, PROJECTS, ROOT, config, defaultProfile, die, exists, latestSession, listProjects, load, peerOf, remove, restore, save, transcriptDir, transcriptPath, trustPath,
+  CONFIG_DIR, NAME_RE, PROJECTS, ROOT, config, defaultProfile, die, exists, latestSession, listProjects, load, peerOf, remove, restore, save, slug, transcriptDir, transcriptPath, trustPath,
   type Mode, type Peer, type Project, type Role,
 } from "./store.ts";
 export { trashed } from "./store.ts";
 import * as tmux from "./tmux.ts";
 import { PALETTE, projectColor } from "./colors.ts";
 import { attention, attentionSettings, clearAttention, projectAttention, type Attention } from "./attention.ts";
+import { mcpConfig } from "./mcp.ts";
 
 export interface PeerStatus extends Peer {
   state: PeerState;
@@ -42,7 +43,22 @@ export interface ProjectRow {
   last_used: number; // epoch seconds, 0 = never
 }
 
-export const CLI = `${process.execPath} ${ROOT}/src/cli.ts`;
+// One stable command for tmux hooks, pane commands and the MCP config: bun on the
+// source where bun exists, the compiled binary (dist/) where it does not.
+export const CLI = `${ROOT}/bin/my-claude`;
+
+// dist/my-claude is what containers run; keep it no older than the source. Host only.
+export function ensureBinary(): string | null {
+  if (!existsSync(join(ROOT, "src", "cli.ts")) || !/\/bun$/.test(process.execPath)) return null;
+  const bin = join(ROOT, "dist", "my-claude");
+  let newest = 0;
+  const walk = (d: string) => { for (const f of readdirSync(d, { withFileTypes: true })) { const fp = join(d, f.name); if (f.isDirectory()) walk(fp); else newest = Math.max(newest, statSync(fp).mtimeMs); } };
+  walk(join(ROOT, "src"));
+  const have = statSync(bin, { throwIfNoEntry: false })?.mtimeMs ?? 0;
+  if (have > newest) return null;
+  const r = spawnSync(process.execPath, ["build", "--compile", join(ROOT, "src", "cli.ts"), "--outfile", bin], { encoding: "utf8", cwd: ROOT });
+  return r.status === 0 ? `rebuilt ${bin}` : `dist/my-claude build failed: ${(r.stderr || "").trim().split("\n").pop()}`;
+}
 
 export function newProject(name: string, o: { goal?: string; shared?: boolean; profile?: string; color?: string } = {}): Project {
   if (!NAME_RE.test(name)) die(`bad project name '${name}'`);
@@ -338,6 +354,31 @@ export function undelete(which: string, log?: (s: string) => void): { name: stri
   return { name: p.name, recloned, missing };
 }
 
+// A whole project in one go, as the MCP tool does it: create, add repos, lead with the
+// work order as goal and first prompt, bring it up.
+export async function startProject(o: { name: string; repos: string[]; workOrder: string; lead?: string; color?: string; shared?: boolean; by?: string }): Promise<{ name: string; peers: string[]; lead: string; notes: string[] }> {
+  const name = slug(o.name);
+  if (!name) die(`bad project name '${o.name}'`);
+  if (!o.repos?.length) die("at least one repo");
+  if (!o.workOrder?.trim()) die("a work order is required: the lead sees nothing else");
+  const p = newProject(name, { goal: o.workOrder, shared: o.shared, color: o.color });
+  if (o.by) { p.by = o.by; save(p); }
+  const notes: string[] = [];
+  const added: Peer[] = [];
+  for (const spec of o.repos) added.push(...(await addRepos(name, spec, { log: (m) => notes.push(m) })));
+  const lead = o.lead ?? added[0].repo;
+  const q = load(name);
+  const lp = peerOf(q, lead);
+  lp.kickoff = o.workOrder;
+  q.lead = lead;
+  for (const x of q.peers) x.role = x.repo === lead ? "lead" : "peer";
+  save(q);
+  const bin = ensureBinary();
+  if (bin) notes.push(bin);
+  for (const r of up(name)) if (r.action === "skipped") notes.push(`${r.repo}: skipped, ${r.detail}`);
+  return { name, peers: q.peers.map((x) => x.repo), lead, notes };
+}
+
 function spawn(p: Project, peer: Peer): string {
   const prof = profile(p.profile);
   const env = { MY_CLAUDE_ROOT: ROOT, MY_CLAUDE_PROJECT: p.name, MY_CLAUDE_PEER: peer.repo, ...prof.paneEnv(p.name, peer.repo) };
@@ -500,7 +541,9 @@ export function projectBrief(p: Project, peer: Peer): string {
       : "No other session is on the project yet; more may be added.",
     p.lead ? (peer.repo === p.lead ? "You own the outcome: coordinate the work across repos." : `${p.lead} leads; take direction from them.`) : "Nobody leads yet; coordinate as equals.",
     p.goal ? `Goal: ${p.goal}` : "",
+    p.by ? `This project was started by the Claude session ${p.by} on the user's behalf; it is a claude-peers peer, report results back to it as well as to the user.` : "",
     `Everyone is in the claude-peers group "${p.name}": message the group to reach all of them, or a peer by its repo name or path. When your work touches another repo, or you need something from it, talk to that session instead of guessing or editing it yourself; tell the group when you change an interface others build against.`,
+    `Need more hands or a separate line of work (a new idea, a change in other repos, anything that should outlive this conversation)? Do not spawn subagents for it: call the my-claude MCP tool start_project with the repos and a written work order. That gives it durable sessions the user sees and can talk to in the side panel. add_repos extends a project; list_projects and project_status show what exists.`,
     `The project is the tmux session "${tmux.sess(p.name)}", window "main", one pane per session titled with its repo name (yours: "${peer.repo}"); a shell the user opened beside a peer is titled "shell:<repo>", and "${tmux.PANEL_TITLE}" is the project list. You can read any pane, e.g. when asked what another peer or a build shell is showing: find it with \`tmux list-panes -t ${tmux.sess(p.name)}:main -F '#{pane_id} #{pane_title}'\`, then \`tmux capture-pane -p -J -S -200 -t <pane_id>\` (reading only; do not type into another pane).`,
   ];
   return lines.filter(Boolean).join("\n");
@@ -512,6 +555,8 @@ function claudeArgs(name: string, peer: Peer): string[] {
   args.push("--name", `${name}/${peer.repo}`);
   args.push("--append-system-prompt", projectBrief(load(name), peer));
   args.push("--settings", attentionSettings(name, peer.repo));
+  args.push("--mcp-config", mcpConfig(ROOT, CONFIG_DIR));
+  if (peer.kickoff && args[0] === "--session-id") args.push(peer.kickoff);
   return args;
 }
 

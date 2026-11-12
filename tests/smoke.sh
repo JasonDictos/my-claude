@@ -9,7 +9,7 @@ tmp=$(mktemp -d); trap 'tmux kill-server 2>/dev/null || true; rm -rf "$tmp"' EXI
 export TMUX_TMPDIR=$tmp; unset TMUX
 export MY_CLAUDE_ROOT=$tmp/root MY_CLAUDE_CLAUDE=$here/fake-claude FAKE_CLAUDE_LOG=$tmp/claude.log HOME=$tmp/home
 mkdir -p "$MY_CLAUDE_ROOT" "$HOME" "$tmp/r1" "$tmp/r2" "$tmp/r3" "$tmp/r4" "$tmp/r5"
-ln -s "$here/../src" "$MY_CLAUDE_ROOT/src"; ln -s "$here/../node_modules" "$MY_CLAUDE_ROOT/node_modules"
+ln -s "$here/../src" "$MY_CLAUDE_ROOT/src"; ln -s "$here/../bin" "$MY_CLAUDE_ROOT/bin"; ln -s "$here/../node_modules" "$MY_CLAUDE_ROOT/node_modules"
 echo '{"profile":"host","peers":{"cli":"/nonexistent/claude-peers-cli"}}' > "$MY_CLAUDE_ROOT/config.json"
 mc() { bun "$MY_CLAUDE_ROOT/src/cli.ts" "$@"; }
 fail() { echo "FAIL: $*" >&2; exit 1; }

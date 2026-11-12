@@ -8,6 +8,7 @@
   },
   "scripts": {
     "test": "tests/smoke.sh",
+    "build": "bun build --compile src/cli.ts --outfile dist/my-claude",
     "typecheck": "tsc --noEmit -p ."
   },
   "dependencies": {

@@ -8,7 +8,7 @@ tmp=$(mktemp -d); trap 'tmux kill-server 2>/dev/null || true; rm -rf "$tmp"' EXI
 export TMUX_TMPDIR=$tmp; unset TMUX
 export MY_CLAUDE_ROOT=$tmp/root MY_CLAUDE_CONFIG_DIR=$tmp/cfg MY_CLAUDE_CLAUDE=$here/fake-claude FAKE_CLAUDE_LOG=$tmp/claude.log FAKE_CLAUDE_SAY=$here/say HOME=$tmp/home
 mkdir -p "$MY_CLAUDE_ROOT" "$MY_CLAUDE_CONFIG_DIR" "$HOME" "$HOME/src"
-ln -s "$repo/src" "$MY_CLAUDE_ROOT/src"; ln -s "$repo/node_modules" "$MY_CLAUDE_ROOT/node_modules"
+ln -s "$repo/src" "$MY_CLAUDE_ROOT/src"; ln -s "$repo/bin" "$MY_CLAUDE_ROOT/bin"; ln -s "$repo/node_modules" "$MY_CLAUDE_ROOT/node_modules"
 echo '{"profile":"host","peers":{"cli":"/nonexistent"}}' > "$MY_CLAUDE_CONFIG_DIR/config.json"
 for r in api web worker docs; do
   mkdir -p "$HOME/src/$r"; git -C "$HOME/src/$r" init -q -b main

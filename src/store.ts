@@ -13,6 +13,7 @@ export interface Peer {
   session: string;
   origin?: string; // "org/repo" when my-claude cloned it: enough to clone it again after undelete
   branch?: string;
+  kickoff?: string; // first prompt, sent once when the conversation is new (a work order)
 }
 
 export interface Project {
@@ -22,6 +23,7 @@ export interface Project {
   profile: string;
   lead: string | null;
   color?: string | null;
+  by?: string; // "<project>/<repo>" of the session that started this one, if a Claude did
   peers: Peer[];
 }
 
