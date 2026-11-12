@@ -194,6 +194,11 @@ function bindCycleKeys(cli: string): void {
   // prefix+n / prefix+p: next / previous tab of the project (tmux's own meaning).
   out("tmux", ["bind-key", "n", "next-window"], { ok: true });
   out("tmux", ["bind-key", "p", "previous-window"], { ok: true });
+  // Mouse: a project on the status bar switches to it; a tab selects its window; a
+  // minimised shell strip restores. Other clicks keep tmux's behaviour.
+  out("tmux", ["bind-key", "-n", "MouseDown1StatusDefault", "run-shell", `${cli} _click '#{mouse_status_range}'`], { ok: true });
+  out("tmux", ["bind-key", "-n", "MouseDown1Status", "select-window", "-t", "="], { ok: true });
+  out("tmux", ["bind-key", "-n", "MouseDown1Pane", "if-shell", "-F", "-t", "=", `#{&&:#{pane_floating_flag},#{<=:#{pane_height},${MIN_H}}}`, `run-shell "${cli} _click 'pane:#{pane_id}'"`, "select-pane -t = ; send-keys -M"], { ok: true });
   installHooks(cli);
 }
 
@@ -219,18 +224,33 @@ export function activePeer(): { name: string; repo: string } | null {
   return { name: s.slice(3), repo };
 }
 
-// A floating shell "minimised" is a two-line strip in the bottom-right corner, its title on
-// the border; restoring brings it back to size, centred and in front. tmux has no hide.
+// Minimised floating shells form a taskbar: two-line strips along the bottom edge, left to
+// right, each as wide as its title, re-packed on every change. tmux has no hide, so the
+// strip is the minimise; restoring brings the pane back to size, centred and in front.
 export const MIN_H = 2;
-export function minimiseFloat(id: string, width = 28): void {
-  out("tmux", ["resize-pane", "-t", id, "-x", String(width), "-y", String(MIN_H)], { ok: true });
-  out("tmux", ["move-pane", "-P", "bottom-right", "-t", id], { ok: true });
+const isMin = (p: PaneRow) => p.floating && p.height <= MIN_H;
+export function minimiseFloat(name: string, id: string): void {
+  const title = panes(name).find((p) => p.id === id)?.title ?? "";
+  out("tmux", ["resize-pane", "-t", id, "-x", String(Math.max(12, title.length + 4)), "-y", String(MIN_H)], { ok: true });
+  packMinimised(name);
 }
-export function restoreFloat(id: string): void {
+export function restoreFloat(name: string, id: string): void {
   out("tmux", ["resize-pane", "-t", id, "-x", "60%", "-y", "50%"], { ok: true });
   out("tmux", ["move-pane", "-P", "centre", "-t", id], { ok: true });
   out("tmux", ["move-pane", "-z", "front", "-t", id], { ok: true });
   out("tmux", ["select-pane", "-t", id], { ok: true });
+  packMinimised(name);
+}
+// Lay the minimised strips of each window along its bottom edge, in their current order.
+export function packMinimised(name: string): void {
+  const all = panes(name);
+  for (const w of windows(name)) {
+    let x = 0;
+    for (const p of all.filter((q) => q.window === w.id && isMin(q)).sort((a, b) => a.start - b.start)) {
+      out("tmux", ["move-pane", "-X", String(x), "-Y", String(Math.max(0, w.height - MIN_H - 2)), "-t", p.id], { ok: true });
+      x += p.width + 2;
+    }
+  }
 }
 
 // A shell over the grid: a floating pane (tmux 3.8+), else a split below the active pane.
@@ -266,26 +286,28 @@ export function panes(name: string): PaneRow[] {
 // Layout members only: tmux 3.8's floating panes (prefix+*, our shells) belong to no layout.
 export const docked = (name: string) => panes(name).filter((p) => !p.floating);
 
-// The session's status bar: project on its color, peers (lead marked), how to get back.
+// The session's status bar, two rows, all clickable (tmux status ranges):
+//   row 0: every project session, the current one on its color; click switches the client.
+//   row 1: the project's windows as tabs named by their repos; click selects the window.
+// Both are live format loops (#{S:} / #{W:}), nothing to refresh when things change.
 export function applyStatus(name: string, peers: { repo: string; lead: boolean }[], color: string, cli: string): void {
   const s = sess(name);
   if (!sessionUp(name)) return;
   bindCycleKeys(cli);
-  const roster = peers.map((p) => (p.lead ? `#[bold]${p.repo}#[nobold]★` : p.repo)).join("  ");
   const set = (k: string, v: string) => out("tmux", ["set-option", "-t", s, k, v], { ok: true });
-  set("status", "on");
-  set("status-style", "bg=colour236,fg=colour250");
-  set("status-left-length", "80");
-  set("status-left", `#[bg=${color},fg=colour232,bold] ${name} #[bg=colour236,fg=${color}]#[default] ${roster} `);
-  set("status-right-length", "60");
-  set("status-right", `#[fg=colour245]${windows(name).length > 1 ? "prefix+n/p tab · " : ""}prefix+h shell · prefix+Tab next · prefix+d menu #[fg=${color}]█`);
-  // Tabs appear once the project spans more than one window, each named by its repos.
-  const tabs = windows(name).length > 1;
+  set("@mc_color", color);
+  const roster = peers.map((p) => (p.lead ? `#[bold]${p.repo}#[nobold]★` : p.repo)).join(" ");
+  const cur = `#[range=user|proj:#{session_name}]#[bg=#{@mc_color}#,fg=colour232#,bold] #{s/^mc-//:session_name} #[default]#[norange]`;
+  const other = `#[range=user|proj:#{session_name}]#[fg=#{@mc_color}] #{s/^mc-//:session_name} #[default]#[norange]`;
+  const projects = `#{S:#{?#{m:mc-*,#{session_name}},#{?#{==:#{session_name},#{client_session}},${cur},${other}},}}`;
   const names = `#{P:#{?#{==:#{pane_title},${PANEL_TITLE}},,#{pane_title} }}`;
-  set("window-status-format", tabs ? `#[fg=colour245] #I #[fg=colour250]${names}` : "");
-  set("window-status-current-format", tabs ? `#[bg=${color},fg=colour232,bold] #I ${names}#[default]` : "");
-  set("window-status-separator", tabs ? "│" : "");
-  set("status-justify", "left");
+  set("status", "2");
+  set("status-style", "bg=colour236,fg=colour250");
+  set("status-format[0]", `#[align=left]${projects}#[align=right]#[fg=colour245]${roster} · prefix+h shell · prefix+n/p tab · prefix+d menu #[fg=${color}]█`);
+  // Inline, not via window-status-*: those are per-window options and -t <session> sets one window.
+  const tab = `#[range=window|#{window_index}]#[fg=colour245] #W #[fg=colour250]${names}#[norange]│`;
+  const curTab = `#[range=window|#{window_index}]#[bg=${color}#,fg=colour232#,bold] #W ${names}#[default]#[norange]│`;
+  set("status-format[1]", `#[align=left]#[list=on]#{W:${tab},${curTab}}#[nolist]`);
   set("pane-border-style", "fg=colour238");
   set("pane-active-border-style", `fg=${color}`);
 }

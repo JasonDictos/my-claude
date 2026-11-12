@@ -576,6 +576,15 @@ function relaunchInPane(p: Project, peer: Peer, pane: string): void {
 }
 
 // prefix+h from a project pane: open a shell in that peer's container, in a pane below.
+// A click on the status bar or a minimised shell strip (see tmux.bindCycleKeys).
+export function click(range: string): void {
+  if (range.startsWith("proj:")) out("tmux", ["switch-client", "-t", range.slice(5)], { ok: true });
+  else if (range.startsWith("pane:")) {
+    const s = tmux.currentSession();
+    if (s?.startsWith("mc-")) tmux.restoreFloat(s.slice(3), range.slice(5));
+  }
+}
+
 // prefix+h is a toggle, so a shell persists until you `exit` it: from a peer pane it opens
 // the shell or brings a minimised one back; from the shell it minimises it to a strip in
 // the corner and returns focus to the peer.
@@ -586,14 +595,14 @@ export function shellHere(): void {
   if (at.repo.startsWith("shell:")) {
     const repo = at.repo.slice(6);
     const me = tmux.panes(at.name).find((x) => x.active && x.winActive);
-    if (me?.floating) tmux.minimiseFloat(me.id);
+    if (me?.floating) tmux.minimiseFloat(at.name, me.id);
     const back = tmux.paneOf(at.name, repo);
     if (back) out("tmux", ["select-pane", "-t", back], { ok: true });
     return;
   }
   peerOf(p, at.repo);
   const have = tmux.panes(at.name).find((x) => x.title === `shell:${at.repo}` && x.floating);
-  if (have) { tmux.restoreFloat(have.id); return; }
+  if (have) { tmux.restoreFloat(at.name, have.id); return; }
   tmux.shellOverActive(`${CLI} _shell ${at.name} ${at.repo}`, `shell:${at.repo}`);
   tmux.tile(at.name);
 }

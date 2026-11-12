@@ -213,6 +213,12 @@ my-claude panel                         focus/open the side panel (bound to pref
 `--shared` puts every peer of a project in **one** container (profile
 permitting) so they share build state; the default is one per repo.
 
+The status bar has two rows, both clickable with tmux's `mouse on`: the top
+row lists every project that is up, the current one on its color (click to
+switch); the second row is the current project's tabs, named by their repos
+(click to select). Minimised shells sit as a taskbar of two-line strips along
+the bottom edge of the window; click one to restore it.
+
 Shells persist: prefix+h is a toggle. From a peer it opens that peer's shell as
 a floating pane, or brings a minimised one back, centred and in front. From the
 shell it minimises it to a two-line strip in the bottom-right corner, title on

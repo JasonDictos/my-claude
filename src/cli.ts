@@ -165,6 +165,9 @@ function main(argv: string[]): number | Promise<number> {
       if (rest.length < 1 || rest.length > 2) usage();
       console.log(`deleted ${rest[0]} -> ${core.deleteProject(rest[0], rest[1] === "--force")} (conversations kept on disk)`);
       return 0;
+    case "_click":
+      core.click(rest[0] ?? "");
+      return 0;
     case "mcp":
       return import("./mcp.ts").then((m) => m.serve());
     case "build":
