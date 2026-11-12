@@ -15,12 +15,14 @@ import {
 export { trashed } from "./store.ts";
 import * as tmux from "./tmux.ts";
 import { PALETTE, projectColor } from "./colors.ts";
+import { attention, attentionSettings, clearAttention, projectAttention, type Attention } from "./attention.ts";
 
 export interface PeerStatus extends Peer {
   state: PeerState;
   pane: string | null;
   pid: number | null;
   lock: Record<string, unknown> | null;
+  attn: Attention; // "ask": waiting on a permission/question; "wait": turn done, idle for the next prompt
 }
 export interface ProjectStatus extends Project {
   state: ProjectState;
@@ -36,6 +38,7 @@ export interface ProjectRow {
   goal: string;
   color: string | null;
   state: ProjectState;
+  attn: Attention;
   last_used: number; // epoch seconds, 0 = never
 }
 
@@ -210,6 +213,7 @@ export function rmPeer(name: string, repo: string): string {
   const p = load(name);
   const peer = peerOf(p, repo);
   p.peers = p.peers.filter((x) => x.repo !== repo);
+  clearAttention(name, repo);
   if (p.lead === repo) p.lead = null;
   save(p);
   void syncGroup(p).then(() => tellGroup(p, `${repo} left the project; its session is gone.`));
@@ -458,6 +462,7 @@ export function status(name: string): ProjectStatus {
       pane: tmux.paneOf(name, peer.repo),
       pid: occupantPid(peer.path),
       lock: lockInfo(peer.path),
+      attn: attention(name, peer.repo),
     })),
     strays: strayPanes(p).map((x) => x.title),
   };
@@ -473,7 +478,7 @@ export function ls(): ProjectRow[] {
         /* no transcript yet */
       }
     }
-    return { name: p.name, peers: p.peers.length, lead: p.lead, mode: p.mode, profile: p.profile, goal: p.goal, color: p.color ?? null, state: projectState(p), last_used: last };
+    return { name: p.name, peers: p.peers.length, lead: p.lead, mode: p.mode, profile: p.profile, goal: p.goal, color: p.color ?? null, state: projectState(p), attn: projectAttention(p.name, p.peers.map((x) => x.repo)), last_used: last };
   });
 }
 
@@ -506,6 +511,7 @@ function claudeArgs(name: string, peer: Peer): string[] {
   if (peer.model) args.push("--model", peer.model);
   args.push("--name", `${name}/${peer.repo}`);
   args.push("--append-system-prompt", projectBrief(load(name), peer));
+  args.push("--settings", attentionSettings(name, peer.repo));
   return args;
 }
 
@@ -562,6 +568,7 @@ function launchOnce(name: string, repo: string): number {
   const p = load(name);
   const peer = peerOf(p, repo);
   const prof = profile(p.profile);
+  clearAttention(name, repo);
   const args = claudeArgs(name, peer);
   const ctx = { project: name, repo, path: peer.path, session: peer.session, mode: p.mode, container: tmux.sess(name), args, cmdline: claudeLine(name, peer, args) };
   console.log(`my-claude: ${name}/${repo}  ${args[0] === "--resume" ? "resuming" : "new conversation"} ${peer.session.slice(0, 8)}  profile ${p.profile}${p.mode === "shared" ? " (shared container)" : ""}`);

@@ -8,6 +8,7 @@ import { homedir, hostname } from "node:os";
 import React, { useEffect, useState } from "react";
 import * as core from "../core.ts";
 import type { PeerStatus, ProjectRow, ProjectStatus } from "../core.ts";
+import { attentionColor } from "../attention.ts";
 import { profile } from "../profiles/index.ts";
 import type { ProfileAction } from "../profiles/types.ts";
 import { PROJECTS, defaultProfile, slug } from "../store.ts";
@@ -371,6 +372,7 @@ function App() {
       { h: "Role", v: (p) => (p.role === "lead" ? "LEAD" : "-") },
       { h: "Model", v: (p) => p.model ?? "default" },
       { h: "Live", v: (p) => liveMark(p.state), color: (p) => liveColor(p.state) },
+      { h: "Needs", v: (p) => (p.attn === "ask" ? "! answer" : p.attn === "wait" ? "✉ prompt" : "-"), color: (p) => attentionColor(p.attn) },
       { h: "Session", v: (p) => p.session.slice(0, 8) },
     ];
     return (
@@ -393,6 +395,7 @@ function App() {
     { h: "Lead", v: (r) => r.lead ?? "-" },
     { h: "Mode", v: (r) => (r.mode === "shared" ? "shared" : "per-repo") },
     { h: "State", v: (r) => r.state, color: (r) => (r.state === "UP" ? "green" : r.state === "PARTIAL" ? "yellow" : undefined) },
+    { h: "Needs", v: (r) => (r.attn === "ask" ? "! answer" : r.attn === "wait" ? "✉ prompt" : "-"), color: (r) => attentionColor(r.attn) },
     { h: "Last used", v: (r) => ago(r.last_used) },
   ];
   return (

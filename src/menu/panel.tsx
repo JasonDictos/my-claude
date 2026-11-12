@@ -8,10 +8,11 @@ import * as tmux from "../tmux.ts";
 import { projectColor } from "../colors.ts";
 import { candidates, predict, remember } from "./history.ts";
 import { sizeMark, useTermSize } from "./size.ts";
+import { attentionColor, attentionMark, type Attention } from "../attention.ts";
 
-type Row = { name: string; state: string; color: string | null; peers: number };
+type Row = { name: string; state: string; color: string | null; peers: number; attn: Attention };
 
-const rows = (): Row[] => core.ls().map((p) => ({ name: p.name, state: p.state, color: p.color, peers: p.peers }));
+const rows = (): Row[] => core.ls().map((p) => ({ name: p.name, state: p.state, color: p.color, peers: p.peers, attn: p.attn }));
 const stateMark = (s: string) => (s === "UP" ? "●" : s === "PARTIAL" ? "◐" : "○");
 const stateColor = (s: string) => (s === "UP" ? "green" : s === "PARTIAL" ? "yellow" : "gray");
 
@@ -26,7 +27,7 @@ function Panel({ session }: { session: string }) {
   // `a`: add repos to the highlighted project, typed right here (same specs as the menu).
   const [add, setAdd] = useState<{ name: string; value: string; cursor: number } | null>(null);
   useEffect(() => {
-    const t = setInterval(() => setList(rows()), 2000);
+    const t = setInterval(() => setList(rows()), 1000);
     // Another panel may have switched the client here with its arrows: show this project highlighted.
     const snap = setInterval(() => { if (tmux.currentSession() === `mc-${session}`) setSel((s) => { const i = listRef.current.findIndex((r) => r.name === session); return i < 0 ? s : i; }); }, 500);
     return () => { clearInterval(t); clearInterval(snap); };
@@ -100,7 +101,8 @@ function Panel({ session }: { session: string }) {
           <Box key={r.name}>
             <Text backgroundColor={c}> </Text>
             <Text color={stateColor(r.state)}> {stateMark(r.state)}</Text>
-            <Text inverse={on} color={on ? undefined : c} bold={r.name === session}>{fit(` ${r.name}`, w - 6)}</Text>
+            <Text inverse={on} color={on ? undefined : c} bold={r.name === session}>{fit(` ${r.name}`, w - 8)}</Text>
+            <Text color={attentionColor(r.attn)} bold>{attentionMark(r.attn)} </Text>
             <Text dimColor>{String(r.peers).padStart(2)}</Text>
           </Box>
         );
@@ -117,7 +119,7 @@ function Panel({ session }: { session: string }) {
           </Box>
         </Box>
       ) : (
-        <Text dimColor>{msg || "↑↓ view  ↵ enter  a add  esc back  q close"}</Text>
+        <Text dimColor>{msg || "↑↓ view  ↵ enter  a add  esc back  q close  ! asks  ✉ done"}</Text>
       )}
     </Box>
   );

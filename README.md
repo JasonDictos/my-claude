@@ -225,6 +225,11 @@ permitting) so they share build state; the default is one per repo.
   reaches them all, and the tmux session and pane titles so it can read another
   peer's or a shell's screen when asked (`--append-system-prompt`). Claude Code snapshots that per
   conversation, so later roster changes and `lead` briefs arrive as peer messages.
+- The side panel and both menu screens show when a Claude needs you: red `!`
+  when it is waiting on a permission or a question, yellow `✉` when its turn is
+  done and it sits idle for the next prompt. Claude Code hooks injected per
+  launch (`--settings`) keep a one-word file per peer under
+  `projects/<name>/.attn/`; typing a prompt or a tool running clears it.
 - `up` never kills a Claude it didn't start; take-over is explicit.
 - Error messages never echo command lines (pane environments carry tokens).
 - Conversation ids are the durable handle; transcripts are Claude Code's own
