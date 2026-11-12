@@ -54,6 +54,11 @@ grep -q -- "$tmp/r2 --session-id" "$FAKE_CLAUDE_LOG" || fail "r2 should still --
 
 mc rm smoke r5 >/dev/null
 [ "$(mc status smoke --json | jq '.peers|length')" = 4 ] || fail "rm"
+cp "$MY_CLAUDE_ROOT/projects/smoke/project.json" "$tmp/smoke.json"
 mc delete smoke >/dev/null
 [ "$(mc ls --json)" = "[]" ] || fail "delete"
+mc undelete | grep -q '^smoke ' || fail "undelete should list the trashed project"
+mc undelete smoke >/dev/null || fail "undelete"
+cmp -s "$tmp/smoke.json" "$MY_CLAUDE_ROOT/projects/smoke/project.json" || fail "undelete must restore the record (paths, session ids) unchanged"
+mc delete smoke >/dev/null
 echo "smoke OK"

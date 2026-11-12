@@ -26,6 +26,7 @@ const USAGE = `usage: my-claude <command> [args]      (no command: interactive m
   restart  <project> <repo>      stop the peer's claude and start it again in the same pane, same conversation
   takeover <project> <repo>      kill the stranger occupying the repo, launch the peer
   delete <project> [--force]     down + move the project dir to .trash/ (conversations kept)
+  undelete [<project>]           bring a deleted project back (same paths, same conversations); no arg lists .trash/
   next | prev                    inside tmux: switch to the next/previous project session (also prefix+Tab / prefix+Shift+Tab)
   shell-here                     inside a project pane: a shell in that peer's container, in a pane below (also prefix+h)`;
 
@@ -162,6 +163,19 @@ function main(argv: string[]): number | Promise<number> {
       if (rest.length < 1 || rest.length > 2) usage();
       console.log(`deleted ${rest[0]} -> ${core.deleteProject(rest[0], rest[1] === "--force")} (conversations kept on disk)`);
       return 0;
+    case "undelete": {
+      if (rest.length > 1) usage();
+      if (!rest.length) {
+        const t = core.trashed();
+        if (!t.length) { console.log("nothing in .trash"); return 0; }
+        console.log(table(t.map((x) => [x.name, ago(Math.floor(x.when / 1000)), x.peers.join(" ") || "-", x.dir])));
+        return 0;
+      }
+      const r = core.undelete(rest[0], (m) => console.error(m));
+      console.log(`restored ${r.name}${r.recloned.length ? ` (cloned again: ${r.recloned.join(", ")})` : ""}`);
+      for (const m of r.missing) console.error(`missing: ${m}  (re-create it at that path, or add it again)`);
+      return r.missing.length ? 1 : 0;
+    }
     case "next": case "prev": {
       const t = core.cycle(cmd);
       if (!t) { console.error("no project sessions"); return 1; }

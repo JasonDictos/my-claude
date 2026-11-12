@@ -11,6 +11,8 @@ export interface Peer {
   role: Role;
   model: string | null;
   session: string;
+  origin?: string; // "org/repo" when my-claude cloned it: enough to clone it again after undelete
+  branch?: string;
 }
 
 export interface Project {
@@ -94,6 +96,36 @@ export function remove(name: string): string {
   const dest = join(trash, `${new Date().toISOString().replace(/[:.]/g, "-")}-${name}`);
   renameSync(join(PROJECTS, name), dest);
   return dest;
+}
+
+export interface Trashed { dir: string; name: string; when: number; peers: string[] }
+
+// What .trash/ holds, newest first. The project.json inside is what matters: peer
+// paths and session ids are how Claude's conversations are keyed.
+export function trashed(): Trashed[] {
+  const trash = join(ROOT, ".trash");
+  if (!existsSync(trash)) return [];
+  return readdirSync(trash)
+    .filter((d) => existsSync(join(trash, d, "project.json")))
+    .map((d) => {
+      const p = JSON.parse(readFileSync(join(trash, d, "project.json"), "utf8")) as Project;
+      const m = d.match(/^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z-/);
+      const when = m ? Date.parse(`${m[1]}T${m[2]}:${m[3]}:${m[4]}.${m[5]}Z`) : 0;
+      return { dir: d, name: p.name, when, peers: p.peers.map((x) => x.repo) };
+    })
+    .sort((a, b) => b.when - a.when);
+}
+
+// Move a trashed project back under projects/: same name, same paths. `which` is a
+// project name (its newest trash entry) or a .trash/ directory name.
+export function restore(which: string): Project {
+  const all = trashed();
+  const t = all.find((x) => x.dir === which) ?? all.find((x) => x.name === which);
+  if (!t) die(`nothing named '${which}' in .trash (my-claude undelete lists it)`);
+  if (exists(t.name)) die(`a project '${t.name}' already exists; delete or rename it first`);
+  mkdirSync(PROJECTS, { recursive: true });
+  renameSync(join(ROOT, ".trash", t.dir), join(PROJECTS, t.name));
+  return load(t.name);
 }
 
 export function peerOf(p: Project, repo: string): Peer {

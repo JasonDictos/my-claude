@@ -89,7 +89,7 @@ typed (Up/Down) and predict as you type (Tab or → accepts; for repos the
 candidates are your history, git checkouts under `~`, and your org's repos).
 
 **Projects screen:** `Enter` open · `n` new (name → container mode → color) ·
-`u` up · `d` down · `x` delete (to `.trash/`, never `rm -rf`) · plus any hotkeys
+`u` up · `d` down · `x` delete (to `.trash/`, never `rm -rf`) · `U` undelete · plus any hotkeys
 your profile adds.
 
 **Project screen:** `Enter` join (tmux, that peer focused) · `a` add repos
@@ -204,6 +204,7 @@ my-claude color <p> <color>
 my-claude restart <p> <repo>            stop that claude, start it again in the same pane
 my-claude takeover <p> <repo>           kill a stranger's claude on the repo, launch the peer
 my-claude delete <p> [--force]          to .trash/
+my-claude undelete [<p>]                bring it back; no arg lists .trash/
 my-claude next | prev                   (bound to prefix+Tab / prefix+Shift+Tab)
 my-claude shell-here                    (bound to prefix+h)
 my-claude panel                         focus/open the side panel (bound to prefix+`)
@@ -215,7 +216,10 @@ permitting) so they share build state; the default is one per repo.
 ## Safety notes
 
 - Deleting goes to `~/my-claude/.trash/<timestamp>-<name>/`. A fresh clone can
-  hold work nothing else has.
+  hold work nothing else has. `undelete` moves it back under the same name and
+  paths, so every peer picks up its old conversation (Claude keys them by
+  directory); a clone whose directory is gone is cloned again from the origin
+  recorded when it was added.
 - `up` never kills a Claude it didn't start; take-over is explicit.
 - Error messages never echo command lines (pane environments carry tokens).
 - Conversation ids are the durable handle; transcripts are Claude Code's own

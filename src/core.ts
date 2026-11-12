@@ -9,9 +9,10 @@ import { homedir } from "node:os";
 import { out, shq, sleep } from "./sh.ts";
 import * as peers from "./peers.ts";
 import {
-  NAME_RE, PROJECTS, ROOT, config, defaultProfile, die, exists, latestSession, listProjects, load, peerOf, remove, save, transcriptDir, transcriptPath, trustPath,
+  NAME_RE, PROJECTS, ROOT, config, defaultProfile, die, exists, latestSession, listProjects, load, peerOf, remove, restore, save, transcriptDir, transcriptPath, trustPath,
   type Mode, type Peer, type Project, type Role,
 } from "./store.ts";
+export { trashed } from "./store.ts";
 import * as tmux from "./tmux.ts";
 import { PALETTE, projectColor } from "./colors.ts";
 
@@ -51,7 +52,7 @@ export function newProject(name: string, o: { goal?: string; shared?: boolean; p
   return p;
 }
 
-export function addPeer(name: string, path: string, o: { role?: Role; model?: string | null; repo?: string } = {}): Peer {
+export function addPeer(name: string, path: string, o: { role?: Role; model?: string | null; repo?: string; origin?: string; branch?: string } = {}): Peer {
   const p = load(name);
   let real: string;
   try {
@@ -72,6 +73,7 @@ export function addPeer(name: string, path: string, o: { role?: Role; model?: st
   }
   // An existing checkout keeps its history: its newest conversation becomes the peer's.
   const peer: Peer = { repo, path: real, role, model: o.model ?? null, session: latestSession(real) ?? crypto.randomUUID() };
+  if (o.origin) { peer.origin = o.origin; if (o.branch) peer.branch = o.branch; }
   trustPath(real);
   p.peers.push(peer);
   save(p);
@@ -196,7 +198,7 @@ export async function addRepo(name: string, line: string, o: { role?: Role; mode
     if (code !== 0) die(`clone failed: ${err.trim().split("\n").pop()}`);
     path = slot;
   }
-  return addPeer(name, path, { role: o.role, model: o.model, repo });
+  return addPeer(name, path, { role: o.role, model: o.model, repo, ...(spec.kind === "clone" ? { origin: spec.repo, branch: spec.branch } : {}) });
 }
 
 export function rmPeer(name: string, repo: string): string {
@@ -304,6 +306,27 @@ export function deleteProject(name: string, force = false): string {
   const dest = remove(name);
   if (peers.available()) void peers.deleteGroup(name);
   return dest;
+}
+
+// Bring a deleted project back. The record (paths, session ids) is what restores the
+// Claude conversations; a clone whose directory is gone is cloned again from its
+// recorded origin, a missing linked path is reported for the user to recreate.
+export function undelete(which: string, log?: (s: string) => void): { name: string; recloned: string[]; missing: string[] } {
+  const p = restore(which);
+  const recloned: string[] = [], missing: string[] = [];
+  for (const peer of p.peers) {
+    if (existsSync(peer.path)) continue;
+    if (peer.origin && peer.path.startsWith(join(PROJECTS, p.name) + "/")) {
+      log?.(`cloning ${peer.origin}${peer.branch ? "#" + peer.branch : ""} -> ${peer.path}...`);
+      const args = ["repo", "clone", peer.origin, peer.path];
+      if (peer.branch) args.push("--", "--branch", peer.branch);
+      const r = spawnSync("gh", args, { encoding: "utf8" });
+      if (r.status === 0) { recloned.push(peer.repo); trustPath(peer.path); continue; }
+      log?.(`clone of ${peer.origin} failed: ${(r.stderr || "").trim().split("\n").pop()}`);
+    }
+    missing.push(`${peer.repo} (${peer.path})`);
+  }
+  return { name: p.name, recloned, missing };
 }
 
 function spawn(p: Project, peer: Peer): string {

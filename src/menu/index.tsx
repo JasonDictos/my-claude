@@ -301,6 +301,14 @@ function App() {
       } });
       else if (input === "u" && cur) act(() => { core.up(cur.name); }, `${cur.name} up`);
       else if (input === "d" && cur) act(() => { core.down(cur.name); }, `${cur.name} down`);
+      else if (input === "U") {
+        const t = core.trashed();
+        if (!t.length) setMsg("nothing in .trash");
+        else setPrompt({ kind: "choice", label: "Undelete", choices: t.map((x) => x.dir), index: 0, onPick: (dir) => act(() => {
+          const r = core.undelete(dir, (m) => setMsg(m));
+          setMsg(`restored ${r.name}${r.recloned.length ? `; cloned again: ${r.recloned.join(", ")}` : ""}${r.missing.length ? `; missing: ${r.missing.join(", ")}` : ""}`);
+        }) });
+      }
       else if (input === "x" && cur) {
         const clones = core.clonesOf(cur.name);
         setPrompt({ kind: "confirm", label: clones.length ? `Delete ${cur.name} and move its clones (${clones.join(", ")}) to .trash?` : `Delete project ${cur.name} (conversations stay on disk)?`, onYes: () => act(() => { const d = core.deleteProject(cur.name, true); setMsg(`moved to ${tilde(d)}`); }) });
@@ -385,7 +393,7 @@ function App() {
       <Box marginTop={1}><Text> Goal: {cur?.goal || <Text dimColor>(none)</Text>}</Text></Box>
       <Box flexGrow={1} />
       <Box>{prompt ? <PromptLine prompt={prompt} /> : <Text color="green"> {msg}</Text>}</Box>
-      <Keys keys={[["Enter", "Open"], ["n", "New"], ...ACTIONS.map((a): [string, string] => [a.key === a.key.toUpperCase() && a.key !== a.key.toLowerCase() ? `⇧${a.key.toLowerCase()}` : a.key, a.label]), ["u", "Up"], ["d", "Down"], ["x", "Delete"], ["Esc", "Quit"]]} />
+      <Keys keys={[["Enter", "Open"], ["n", "New"], ...ACTIONS.map((a): [string, string] => [a.key === a.key.toUpperCase() && a.key !== a.key.toLowerCase() ? `⇧${a.key.toLowerCase()}` : a.key, a.label]), ["u", "Up"], ["d", "Down"], ["x", "Delete"], ["⇧u", "Undelete"], ["Esc", "Quit"]]} />
     </Box>
   );
 }
