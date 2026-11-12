@@ -21,3 +21,4 @@ async function run(args: string[]): Promise<{ ok: boolean; out: string }> {
 export const setGroup = (name: string, members: string[]) => run(["group", name, ...members]);
 export const deleteGroup = (name: string) => run(["group", "rm", name]);
 export const send = (target: string, text: string) => run(["send", target, text]);
+export const broadcast = (group: string, text: string) => run(["broadcast", group, text]);

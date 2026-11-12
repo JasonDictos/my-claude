@@ -78,7 +78,7 @@ export function addPeer(name: string, path: string, o: { role?: Role; model?: st
   p.peers.push(peer);
   save(p);
   if (tmux.sessionUp(name)) spawn(p, peer);
-  void syncGroup(p);
+  void syncGroup(p).then(() => tellGroup(p, `${repo} joined the project at ${real}; it starts when the project is next brought up or added while up.`));
   return peer;
 }
 
@@ -86,6 +86,11 @@ export function addPeer(name: string, path: string, o: { role?: Role; model?: st
 export async function syncGroupNow(name: string): Promise<void> {
   if (!exists(name)) return;
   await syncGroup(load(name));
+}
+
+// Running sessions learn roster changes by message; their system prompt is a snapshot.
+function tellGroup(p: Project, text: string): void {
+  if (p.peers.length && peers.available() && tmux.sessionUp(p.name)) void peers.broadcast(p.name, `[my-claude] project "${p.name}": ${text}`);
 }
 
 // The claude-peers group named after the project holds every peer, addressed by path.
@@ -207,7 +212,7 @@ export function rmPeer(name: string, repo: string): string {
   p.peers = p.peers.filter((x) => x.repo !== repo);
   if (p.lead === repo) p.lead = null;
   save(p);
-  void syncGroup(p);
+  void syncGroup(p).then(() => tellGroup(p, `${repo} left the project; its session is gone.`));
   refreshStatus(p);
   // Its pane (and the claude in it) goes too: the peer is no longer part of the project.
   if (tmux.sessionUp(name)) {
@@ -477,10 +482,29 @@ export function claudeLine(name: string, peer: Peer, args: string[]): string {
   return [`MY_CLAUDE_PROJECT=${shq(name)}`, `MY_CLAUDE_PEER=${shq(peer.repo)}`, "claude", ...args.map(shq)].join(" ");
 }
 
+// What a peer's Claude knows from its first token: the project, its own repo, who
+// else is on it and how to reach them. Claude Code snapshots the system prompt per
+// conversation, so this is the starting picture; roster changes travel as briefs.
+export function projectBrief(p: Project, peer: Peer): string {
+  const others = p.peers.filter((x) => x.repo !== peer.repo);
+  const who = (x: Peer) => `${x.repo} (${x.path})${x.repo === p.lead ? ", the lead" : ""}`;
+  const lines = [
+    `You are one of ${p.peers.length} Claude Code sessions working together on the project "${p.name}", managed by my-claude. Yours is ${peer.repo} at ${peer.path}${peer.repo === p.lead ? "; you lead the project" : ""}.`,
+    others.length
+      ? `The other sessions, each in its own repo: ${others.map(who).join("; ")}. They are live now or will be shortly, and they know about you.`
+      : "No other session is on the project yet; more may be added.",
+    p.lead ? (peer.repo === p.lead ? "You own the outcome: coordinate the work across repos." : `${p.lead} leads; take direction from them.`) : "Nobody leads yet; coordinate as equals.",
+    p.goal ? `Goal: ${p.goal}` : "",
+    `Everyone is in the claude-peers group "${p.name}": message the group to reach all of them, or a peer by its repo name or path. When your work touches another repo, or you need something from it, talk to that session instead of guessing or editing it yourself; tell the group when you change an interface others build against.`,
+  ];
+  return lines.filter(Boolean).join("\n");
+}
+
 function claudeArgs(name: string, peer: Peer): string[] {
   const args = [existsSync(transcriptPath(peer.path, peer.session)) ? "--resume" : "--session-id", peer.session];
   if (peer.model) args.push("--model", peer.model);
   args.push("--name", `${name}/${peer.repo}`);
+  args.push("--append-system-prompt", projectBrief(load(name), peer));
   return args;
 }
 
