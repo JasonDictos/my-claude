@@ -462,7 +462,7 @@ export function up(name: string): UpReport[] {
 export function strayPanes(p: Project): { id: string; title: string }[] {
   if (!tmux.sessionUp(p.name)) return [];
   const known = new Set([tmux.PANEL_TITLE, ...p.peers.flatMap((x) => [x.repo, `shell:${x.repo}`])]);
-  return tmux.panes(p.name).filter((x) => !known.has(x.title));
+  return tmux.docked(p.name).filter((x) => !known.has(x.title));
 }
 
 function closeShellPanes(name: string, repo: string): void {
@@ -576,11 +576,24 @@ function relaunchInPane(p: Project, peer: Peer, pane: string): void {
 }
 
 // prefix+h from a project pane: open a shell in that peer's container, in a pane below.
+// prefix+h is a toggle, so a shell persists until you `exit` it: from a peer pane it opens
+// the shell or brings a minimised one back; from the shell it minimises it to a strip in
+// the corner and returns focus to the peer.
 export function shellHere(): void {
   const at = tmux.activePeer();
   if (!at) die("not in a my-claude project pane");
   const p = load(at.name);
+  if (at.repo.startsWith("shell:")) {
+    const repo = at.repo.slice(6);
+    const me = tmux.panes(at.name).find((x) => x.active && x.winActive);
+    if (me?.floating) tmux.minimiseFloat(me.id);
+    const back = tmux.paneOf(at.name, repo);
+    if (back) out("tmux", ["select-pane", "-t", back], { ok: true });
+    return;
+  }
   peerOf(p, at.repo);
+  const have = tmux.panes(at.name).find((x) => x.title === `shell:${at.repo}` && x.floating);
+  if (have) { tmux.restoreFloat(have.id); return; }
   tmux.shellOverActive(`${CLI} _shell ${at.name} ${at.repo}`, `shell:${at.repo}`);
   tmux.tile(at.name);
 }

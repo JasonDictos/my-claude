@@ -213,6 +213,12 @@ my-claude panel                         focus/open the side panel (bound to pref
 `--shared` puts every peer of a project in **one** container (profile
 permitting) so they share build state; the default is one per repo.
 
+Shells persist: prefix+h is a toggle. From a peer it opens that peer's shell as
+a floating pane, or brings a minimised one back, centred and in front. From the
+shell it minimises it to a two-line strip in the bottom-right corner, title on
+the border, and returns you to the peer. Only `exit` ends the shell. (tmux has
+no hidden state for a pane, so the strip is the minimise.)
+
 Tabs: a window holds up to `panesPerWindow` peers (config.json, default 6);
 the next one opens a second tmux window in the same session, with its own
 panel column. The status bar then shows the tabs, each named by its repos;

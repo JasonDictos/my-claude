@@ -41,7 +41,7 @@ export function windows(name: string): Win[] {
 const cellsByWindow = (name: string) => {
   const m = new Map<string, string[]>();
   for (const w of windows(name)) m.set(w.id, []);
-  for (const p of panes(name)) if (p.title !== PANEL_TITLE) m.get(p.window)?.push(p.id);
+  for (const p of docked(name)) if (p.title !== PANEL_TITLE) m.get(p.window)?.push(p.id);
   return m;
 };
 
@@ -92,7 +92,7 @@ export const PANEL_TITLE = "my-claude-panel";
 export function tile(name: string): void {
   if (name.startsWith("mc-")) name = name.slice(3);
   if (!sessionUp(name)) return;
-  const all = panes(name);
+  const all = docked(name);
   const wins = windows(name);
   for (const w of wins) {
     const mine = all.filter((p) => p.window === w.id);
@@ -135,7 +135,7 @@ export function panelPane(name: string): string | null {
 
 // Every window of the project gets its side panel; returns the active window's.
 export function openPanel(name: string, cli: string, focus: boolean): string | null {
-  const all = panes(name);
+  const all = docked(name);
   let opened = false;
   for (const w of windows(name)) {
     const mine = all.filter((p) => p.window === w.id);
@@ -219,6 +219,20 @@ export function activePeer(): { name: string; repo: string } | null {
   return { name: s.slice(3), repo };
 }
 
+// A floating shell "minimised" is a two-line strip in the bottom-right corner, its title on
+// the border; restoring brings it back to size, centred and in front. tmux has no hide.
+export const MIN_H = 2;
+export function minimiseFloat(id: string, width = 28): void {
+  out("tmux", ["resize-pane", "-t", id, "-x", String(width), "-y", String(MIN_H)], { ok: true });
+  out("tmux", ["move-pane", "-P", "bottom-right", "-t", id], { ok: true });
+}
+export function restoreFloat(id: string): void {
+  out("tmux", ["resize-pane", "-t", id, "-x", "60%", "-y", "50%"], { ok: true });
+  out("tmux", ["move-pane", "-P", "centre", "-t", id], { ok: true });
+  out("tmux", ["move-pane", "-z", "front", "-t", id], { ok: true });
+  out("tmux", ["select-pane", "-t", id], { ok: true });
+}
+
 // A shell over the grid: a floating pane (tmux 3.8+), else a split below the active pane.
 export function shellOverActive(cmd: string, title: string): void {
   if (floatingPanes()) {
@@ -238,16 +252,19 @@ function floatingPanes(): boolean {
   return floating;
 }
 
-// Every pane of the project's window: peers carry their repo as title, shells "shell:<repo>".
-// tmux 3.8's floating panes (prefix+*) are left out: they belong to no layout.
-export interface PaneRow { id: string; title: string; window: string; winActive: boolean; active: boolean; last: boolean; start: number }
+// Every pane of the project, all windows, floats included: peers carry their repo as
+// title, shells "shell:<repo>", the panel its own.
+export interface PaneRow { id: string; title: string; window: string; winActive: boolean; active: boolean; last: boolean; start: number; floating: boolean; width: number; height: number }
 export function panes(name: string): PaneRow[] {
-  const lines = out("tmux", ["list-panes", "-s", "-t", sess(name), "-F", "#{pane_floating_flag}\t#{pane_id}\t#{window_id}\t#{window_active}\t#{pane_active}\t#{pane_last}\t#{pane_start_time}\t#{pane_title}"], { ok: true });
+  const lines = out("tmux", ["list-panes", "-s", "-t", sess(name), "-F", "#{pane_floating_flag}\t#{pane_id}\t#{window_id}\t#{window_active}\t#{pane_active}\t#{pane_last}\t#{pane_start_time}\t#{pane_width}\t#{pane_height}\t#{pane_title}"], { ok: true });
   return lines.split("\n").filter(Boolean).map((l) => {
-    const [fl, id, win, wa, pa, pl, st, ...t] = l.split("\t");
-    return fl === "1" ? null : { id, title: t.join("\t"), window: win, winActive: wa === "1", active: pa === "1", last: pl === "1", start: Number(st || 0) };
-  }).filter((x): x is PaneRow => x !== null);
+    const [fl, id, win, wa, pa, pl, st, w, h, ...t] = l.split("\t");
+    return { id, title: t.join("\t"), window: win, winActive: wa === "1", active: pa === "1", last: pl === "1", start: Number(st || 0), floating: fl === "1", width: Number(w), height: Number(h) };
+  });
 }
+
+// Layout members only: tmux 3.8's floating panes (prefix+*, our shells) belong to no layout.
+export const docked = (name: string) => panes(name).filter((p) => !p.floating);
 
 // The session's status bar: project on its color, peers (lead marked), how to get back.
 export function applyStatus(name: string, peers: { repo: string; lead: boolean }[], color: string, cli: string): void {
