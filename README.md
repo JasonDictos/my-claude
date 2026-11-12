@@ -236,7 +236,7 @@ source is newer).
   recorded when it was added.
 - Every peer's Claude starts knowing the project: its own repo, the other
   sessions and their paths, who leads, the goal, and the claude-peers group that
-  reaches them all, and the tmux session and pane titles so it can read another
+  reaches them all (`mc-<project>`, like the tmux session), and the tmux session and pane titles so it can read another
   peer's or a shell's screen when asked (`--append-system-prompt`). Claude Code snapshots that per
   conversation, so later roster changes and `lead` briefs arrive as peer messages.
 - The side panel and both menu screens show when a Claude needs you: red `!`

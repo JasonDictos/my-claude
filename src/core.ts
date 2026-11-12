@@ -102,20 +102,30 @@ export function addPeer(name: string, path: string, o: { role?: Role; model?: st
 }
 
 // Awaitable form for the CLI, which exits as soon as its command returns.
+// The claude-peers group of a project. Prefixed like the tmux session: peer names are
+// repo basenames and share the namespace, so a project named after one of its repos
+// ("archctl" with an archctl repo) would otherwise be unaddressable as a group.
+export const GROUP = (name: string) => `mc-${name}`;
+
+// Resync and say so when the broker refused: a group that silently stays stale sends
+// messages to the wrong sessions.
 export async function syncGroupNow(name: string): Promise<void> {
   if (!exists(name)) return;
-  await syncGroup(load(name));
+  const err = await syncGroup(load(name));
+  if (err) console.error(`my-claude: claude-peers group ${GROUP(name)} not updated: ${err}`);
 }
 
 // Running sessions learn roster changes by message; their system prompt is a snapshot.
 function tellGroup(p: Project, text: string): void {
-  if (p.peers.length && peers.available() && tmux.sessionUp(p.name)) void peers.broadcast(p.name, `[my-claude] project "${p.name}": ${text}`);
+  if (p.peers.length && peers.available() && tmux.sessionUp(p.name)) void peers.broadcast(GROUP(p.name), `[my-claude] project "${p.name}": ${text}`);
 }
 
-// The claude-peers group named after the project holds every peer, addressed by path.
-export function syncGroup(p: Project): Promise<unknown> {
-  if (!peers.available()) return Promise.resolve();
-  return p.peers.length ? peers.setGroup(p.name, p.peers.map((x) => x.path)) : peers.deleteGroup(p.name);
+// The project's claude-peers group holds every peer, addressed by path. Resolves to the
+// broker's complaint when it refused, null when fine or when there is no broker CLI.
+export async function syncGroup(p: Project): Promise<string | null> {
+  if (!peers.available()) return null;
+  const r = await (p.peers.length ? peers.setGroup(GROUP(p.name), p.peers.map((x) => x.path)) : peers.deleteGroup(GROUP(p.name)));
+  return r.ok || !p.peers.length ? null : r.out.split("\n")[0];
 }
 
 // What "Add repo" accepts, one line:
@@ -288,11 +298,11 @@ export async function brief(p: Project): Promise<string[]> {
   const roster = p.peers.map((x) => `${x.repo} (${x.path})${x.repo === p.lead ? " [lead]" : ""}`).join(", ");
   const goal = p.goal ? p.goal : "(no goal written yet)";
   const notes: string[] = [];
-  const leadMsg = `You lead project "${p.name}".\nGoal: ${goal}\nPeers: ${roster}.\nThey are the claude-peers group "${p.name}"; message it to reach everyone, or a peer by name. Coordinate the work across repos; you own the outcome.`;
+  const leadMsg = `You lead project "${p.name}".\nGoal: ${goal}\nPeers: ${roster}.\nThey are the claude-peers group "${GROUP(p.name)}"; message it to reach everyone, or a peer by its path. Coordinate the work across repos; you own the outcome.`;
   notes.push(`${lead.repo}: ${(await peers.send(lead.path, leadMsg)).out.split("\n")[0]}`);
   for (const x of p.peers) {
     if (x.repo === p.lead) continue;
-    const msg = `You are part of project "${p.name}", working in ${x.repo} (${x.path}).\nLead: ${lead.repo} (${lead.path}); take direction from them.\nGoal: ${goal}\nThe claude-peers group "${p.name}" reaches everyone on the project.`;
+    const msg = `You are part of project "${p.name}", working in ${x.repo} (${x.path}).\nLead: ${lead.repo} (${lead.path}); take direction from them.\nGoal: ${goal}\nThe claude-peers group "${GROUP(p.name)}" reaches everyone on the project.`;
     notes.push(`${x.repo}: ${(await peers.send(x.path, msg)).out.split("\n")[0]}`);
   }
   return notes;
@@ -329,7 +339,7 @@ export function deleteProject(name: string, force = false): string {
   if (clones.length && !force) die(`${name} has cloned repos (${clones.join(", ")}); use --force (they go to .trash, not rm -rf)`);
   tmux.killSession(name);
   const dest = remove(name);
-  if (peers.available()) void peers.deleteGroup(name);
+  if (peers.available()) void peers.deleteGroup(GROUP(name));
   return dest;
 }
 
@@ -542,7 +552,7 @@ export function projectBrief(p: Project, peer: Peer): string {
     p.lead ? (peer.repo === p.lead ? "You own the outcome: coordinate the work across repos." : `${p.lead} leads; take direction from them.`) : "Nobody leads yet; coordinate as equals.",
     p.goal ? `Goal: ${p.goal}` : "",
     p.by ? `This project was started by the Claude session ${p.by} on the user's behalf; it is a claude-peers peer, report results back to it as well as to the user.` : "",
-    `Everyone is in the claude-peers group "${p.name}": message the group to reach all of them, or a peer by its repo name or path. When your work touches another repo, or you need something from it, talk to that session instead of guessing or editing it yourself; tell the group when you change an interface others build against.`,
+    `Everyone is in the claude-peers group "${GROUP(p.name)}": message the group to reach all of them, or one peer by its path (paths are unambiguous; a repo name can carry a suffix like -2 when the same repo is open in another project). When your work touches another repo, or you need something from it, talk to that session instead of guessing or editing it yourself; tell the group when you change an interface others build against. "Work with your peers" means exactly this. The roster above is from your launch; the my-claude MCP tool project_status gives the current one.`,
     `Need more hands or a separate line of work (a new idea, a change in other repos, anything that should outlive this conversation)? Do not spawn subagents for it: call the my-claude MCP tool start_project with the repos and a written work order. That gives it durable sessions the user sees and can talk to in the side panel. add_repos extends a project; list_projects and project_status show what exists.`,
     `The project is the tmux session "${tmux.sess(p.name)}", window "main", one pane per session titled with its repo name (yours: "${peer.repo}"); a shell the user opened beside a peer is titled "shell:<repo>", and "${tmux.PANEL_TITLE}" is the project list. You can read any pane, e.g. when asked what another peer or a build shell is showing: find it with \`tmux list-panes -t ${tmux.sess(p.name)}:main -F '#{pane_id} #{pane_title}'\`, then \`tmux capture-pane -p -J -S -200 -t <pane_id>\` (reading only; do not type into another pane).`,
   ];

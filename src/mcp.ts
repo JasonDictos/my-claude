@@ -27,7 +27,7 @@ const TOOLS: Tool[] = [
     },
     run: async (a) => {
       const r = await core.startProject({ name: a.name, repos: a.repos, workOrder: a.work_order, lead: a.lead, color: a.color, shared: a.shared, by: caller() ?? undefined });
-      return [`project ${r.name} is up: ${r.peers.join(", ")}; lead ${r.lead}.`, `The lead got the work order as its first prompt. Message the claude-peers group "${r.name}" to talk to them.`, ...r.notes].join("\n");
+      return [`project ${r.name} is up: ${r.peers.join(", ")}; lead ${r.lead}.`, `The lead got the work order as its first prompt. Message the claude-peers group "${core.GROUP(r.name)}" to talk to them.`, ...r.notes].join("\n");
     },
   },
   {
@@ -48,11 +48,13 @@ const TOOLS: Tool[] = [
   },
   {
     name: "project_status",
-    description: "Peers of a my-claude project: repo, path, role, liveness, whether each one is waiting on the user.",
-    inputSchema: { type: "object", properties: { project: { type: "string" } }, required: ["project"] },
+    description: "Peers of a my-claude project: repo, path, role, liveness, whether each one is waiting on the user, and the claude-peers group that reaches them. Without a project: your own.",
+    inputSchema: { type: "object", properties: { project: { type: "string", description: "Project name; default: the project this session belongs to" } } },
     run: (a) => {
-      const s = core.status(a.project);
-      return JSON.stringify({ name: s.name, state: s.state, goal: s.goal, lead: s.lead, by: s.by ?? null, peers: s.peers.map((p) => ({ repo: p.repo, path: p.path, role: p.role, live: p.state, needs: p.attn })) }, null, 2);
+      const name = a.project ?? process.env.MY_CLAUDE_PROJECT;
+      if (!name) throw new UsageError("no project given and this session is not in one");
+      const s = core.status(name);
+      return JSON.stringify({ name: s.name, group: core.GROUP(s.name), state: s.state, goal: s.goal, lead: s.lead, by: s.by ?? null, peers: s.peers.map((p) => ({ repo: p.repo, path: p.path, role: p.role, live: p.state, needs: p.attn })) }, null, 2);
     },
   },
 ];

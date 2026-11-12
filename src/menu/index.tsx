@@ -377,7 +377,7 @@ function App() {
     ];
     return (
       <Box flexDirection="column" height={lines}>
-        <Bar title={status.name} color={projectColor(status.name, status.color).ink} right={`peers group "${status.name}" · ${status.mode === "shared" ? "shared container" : "container per repo"} · ${status.state}${sizeMark(seq)}`} />
+        <Bar title={status.name} color={projectColor(status.name, status.color).ink} right={`peers group "${core.GROUP(status.name)}" · ${status.mode === "shared" ? "shared container" : "container per repo"} · ${status.state}${sizeMark(seq)}`} />
         <Table cols={peerCols} rows={status.peers} sel={psel} width={columns} />
         {status.peers.length === 0 && <Text dimColor>  no peers yet; press a to add a repo</Text>}
         {status.strays.length > 0 && <Text color="yellow">  stray panes (closed on u): {status.strays.join(", ")}</Text>}
