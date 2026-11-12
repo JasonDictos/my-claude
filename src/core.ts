@@ -392,9 +392,9 @@ export async function startProject(o: { name: string; repos: string[]; workOrder
 function spawn(p: Project, peer: Peer): string {
   const prof = profile(p.profile);
   const env = { MY_CLAUDE_ROOT: ROOT, MY_CLAUDE_PROJECT: p.name, MY_CLAUDE_PEER: peer.repo, ...prof.paneEnv(p.name, peer.repo) };
-  const fresh = !tmux.sessionUp(p.name);
   const pane = tmux.spawnPane(p.name, peer.repo, peer.path, env, `${CLI} _launch ${p.name} ${peer.repo}`);
-  if (fresh && config().panel !== false) tmux.openPanel(p.name, CLI, false);
+  // Every window (a spill-over tab included) gets its panel; a no-op where one exists.
+  if (config().panel !== false) tmux.openPanel(p.name, CLI, false);
   refreshStatus(p);
   return pane;
 }
@@ -554,7 +554,7 @@ export function projectBrief(p: Project, peer: Peer): string {
     p.by ? `This project was started by the Claude session ${p.by} on the user's behalf; it is a claude-peers peer, report results back to it as well as to the user.` : "",
     `Everyone is in the claude-peers group "${GROUP(p.name)}": message the group to reach all of them, or one peer by its path (paths are unambiguous; a repo name can carry a suffix like -2 when the same repo is open in another project). When your work touches another repo, or you need something from it, talk to that session instead of guessing or editing it yourself; tell the group when you change an interface others build against. "Work with your peers" means exactly this. The roster above is from your launch; the my-claude MCP tool project_status gives the current one.`,
     `Need more hands or a separate line of work (a new idea, a change in other repos, anything that should outlive this conversation)? Do not spawn subagents for it: call the my-claude MCP tool start_project with the repos and a written work order. That gives it durable sessions the user sees and can talk to in the side panel. add_repos extends a project; list_projects and project_status show what exists.`,
-    `The project is the tmux session "${tmux.sess(p.name)}", window "main", one pane per session titled with its repo name (yours: "${peer.repo}"); a shell the user opened beside a peer is titled "shell:<repo>", and "${tmux.PANEL_TITLE}" is the project list. You can read any pane, e.g. when asked what another peer or a build shell is showing: find it with \`tmux list-panes -t ${tmux.sess(p.name)}:main -F '#{pane_id} #{pane_title}'\`, then \`tmux capture-pane -p -J -S -200 -t <pane_id>\` (reading only; do not type into another pane).`,
+    `The project is the tmux session "${tmux.sess(p.name)}", one pane per session titled with its repo name (yours: "${peer.repo}"), spread over its windows when there are many; a shell the user opened beside a peer is titled "shell:<repo>", and "${tmux.PANEL_TITLE}" is the project list. You can read any pane, e.g. when asked what another peer or a build shell is showing: find it with \`tmux list-panes -s -t ${tmux.sess(p.name)} -F '#{pane_id} #{pane_title}'\`, then \`tmux capture-pane -p -J -S -200 -t <pane_id>\` (reading only; do not type into another pane).`,
   ];
   return lines.filter(Boolean).join("\n");
 }

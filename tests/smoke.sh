@@ -8,13 +8,15 @@ tmp=$(mktemp -d); trap 'tmux kill-server 2>/dev/null || true; rm -rf "$tmp"' EXI
 # Private tmux server: panes inherit the server's environment, so it must be ours.
 export TMUX_TMPDIR=$tmp; unset TMUX
 export MY_CLAUDE_ROOT=$tmp/root MY_CLAUDE_CLAUDE=$here/fake-claude FAKE_CLAUDE_LOG=$tmp/claude.log HOME=$tmp/home
-mkdir -p "$MY_CLAUDE_ROOT" "$HOME" "$tmp/r1" "$tmp/r2" "$tmp/r3" "$tmp/r4" "$tmp/r5"
+mkdir -p "$MY_CLAUDE_ROOT" "$HOME" "$tmp/r1" "$tmp/r2" "$tmp/r3" "$tmp/r4" "$tmp/r5" "$tmp/r6" "$tmp/r7"
 ln -s "$here/../src" "$MY_CLAUDE_ROOT/src"; ln -s "$here/../bin" "$MY_CLAUDE_ROOT/bin"; ln -s "$here/../node_modules" "$MY_CLAUDE_ROOT/node_modules"
 echo '{"profile":"host","peers":{"cli":"/nonexistent/claude-peers-cli"}}' > "$MY_CLAUDE_ROOT/config.json"
 mc() { bun "$MY_CLAUDE_ROOT/src/cli.ts" "$@"; }
 fail() { echo "FAIL: $*" >&2; exit 1; }
-panes() { tmux list-panes -t mc-smoke:main -F '#{pane_title}' | grep -v '^my-claude-panel$' | sort | tr '\n' ' '; }
-panel() { tmux list-panes -t mc-smoke:main -F '#{pane_title} #{pane_left} #{pane_width}' | grep '^my-claude-panel '; }
+panes() { tmux list-panes -s -t mc-smoke -F '#{pane_title}' | grep -v '^my-claude-panel$' | sort | tr '\n' ' '; }
+panel() { tmux list-panes -t mc-smoke:1 -F '#{pane_title} #{pane_left} #{pane_width}' | grep '^my-claude-panel '; }
+wins() { tmux list-windows -t mc-smoke -F '#{window_index}' | wc -l; }
+panels() { tmux list-panes -s -t mc-smoke -F '#{pane_title}' | grep -c '^my-claude-panel$'; }
 lines() { [ -f "$FAKE_CLAUDE_LOG" ] && wc -l < "$FAKE_CLAUDE_LOG" || echo 0; }
 wait_log() { for _ in $(seq 75); do [ "$(lines)" -ge "$1" ] && return; sleep 0.2; done; fail "expected $1 launches, log: $(cat "$FAKE_CLAUDE_LOG" 2>/dev/null)"; }
 
@@ -34,6 +36,15 @@ mc status smoke | grep -q '^r1 ' || fail "status table"
 mc add smoke "$tmp/r5" --model opus-5.5 >/dev/null
 wait_log 5
 [ "$(panes)" = "r1 r2 r3 r4 r5 " ] || fail "5th pane: $(panes)"
+[ "$(wins)" = 1 ] || fail "5 peers should still be one window, got $(wins)"
+# Spill: the 7th peer opens a second window (tab) with its own panel; removing it closes the tab.
+mc add smoke "$tmp/r6" >/dev/null; mc add smoke "$tmp/r7" >/dev/null; wait_log 7
+[ "$(wins)" = 2 ] || fail "7 peers should spill into 2 windows, got $(wins)"
+[ "$(panels)" = 2 ] || fail "each window needs a panel, got $(panels)"
+[ "$(tmux list-panes -t mc-smoke:2 -F '#{pane_title}' | grep -v panel)" = "r7" ] || fail "r7 should be alone in window 2"
+mc rm smoke r7 >/dev/null; sleep 1
+[ "$(wins)" = 1 ] || fail "empty tab should close, got $(wins)"
+mc rm smoke r6 >/dev/null
 grep -q -- "--model opus-5.5" "$FAKE_CLAUDE_LOG" || fail "model not passed"
 
 mc lead smoke r2 "ship it" >/dev/null; [ "$(mc status smoke --json | jq -r '[.lead,.goal,.peers[0].role,.peers[1].role]|join(",")')" = "r2,ship it,peer,lead" ] || fail "lead+goal"

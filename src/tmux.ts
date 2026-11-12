@@ -1,7 +1,10 @@
-// One tmux session per project (mc-<name>), one window, one titled pane per peer.
+// One tmux session per project (mc-<name>), one titled pane per peer, panes spread over
+// windows ("tabs") once a window holds panesPerWindow of them (config, default 6); every
+// window carries its own side-panel column.
 import { readFileSync } from "node:fs";
 import { ok, out, run } from "./sh.ts";
 import { layout } from "./layout.ts";
+import { config } from "./store.ts";
 
 export const sess = (name: string) => `mc-${name}`;
 
@@ -11,12 +14,8 @@ export function sessionUp(name: string): boolean {
 
 // Pane id and age (seconds) of a peer's pane, or null.
 export function paneInfo(name: string, repo: string): { id: string; age: number } | null {
-  const lines = out("tmux", ["list-panes", "-t", `${sess(name)}:main`, "-F", "#{pane_id}\t#{pane_start_time}\t#{pane_title}"], { ok: true });
-  for (const l of lines.split("\n")) {
-    const [id, start, ...t] = l.split("\t");
-    if (t.join("\t") === repo) return { id, age: Math.max(0, Math.floor(Date.now() / 1000) - Number(start || 0)) };
-  }
-  return null;
+  const p = panes(name).find((x) => x.title === repo);
+  return p ? { id: p.id, age: Math.max(0, Math.floor(Date.now() / 1000) - p.start) } : null;
 }
 
 // Type a command line into a pane's shell.
@@ -26,40 +25,60 @@ export function sendLine(pane: string, line: string): void {
 }
 
 export function paneOf(name: string, repo: string): string | null {
-  const lines = out("tmux", ["list-panes", "-t", `${sess(name)}:main`, "-F", "#{pane_id} #{pane_title}"], { ok: true });
-  for (const l of lines.split("\n")) {
-    const [id, ...t] = l.split(" ");
-    if (t.join(" ") === repo) return id;
-  }
-  return null;
+  return panes(name).find((x) => x.title === repo)?.id ?? null;
 }
+
+export const perWindow = (): number => Math.max(1, Number(config().panesPerWindow) || 6);
+
+export interface Win { id: string; index: number; active: boolean; width: number; height: number }
+export function windows(name: string): Win[] {
+  return out("tmux", ["list-windows", "-t", sess(name), "-F", "#{window_id}\t#{window_index}\t#{window_active}\t#{window_width}\t#{window_height}"], { ok: true })
+    .split("\n").filter(Boolean).map((l) => { const [id, i, a, w, h] = l.split("\t"); return { id, index: Number(i), active: a === "1", width: Number(w), height: Number(h) }; })
+    .sort((a, b) => a.index - b.index);
+}
+
+// Peer panes (not the panel) per window, in window order.
+const cellsByWindow = (name: string) => {
+  const m = new Map<string, string[]>();
+  for (const w of windows(name)) m.set(w.id, []);
+  for (const p of panes(name)) if (p.title !== PANEL_TITLE) m.get(p.window)?.push(p.id);
+  return m;
+};
 
 export function spawnPane(name: string, repo: string, cwd: string, env: Record<string, string>, cmd: string): string {
   const s = sess(name);
   const envArgs = Object.entries(env).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
   let pane: string;
   if (sessionUp(name)) {
-    // Split the roomiest pane; a small active pane gives "no space for a new pane".
-    const biggest = out("tmux", ["list-panes", "-t", `${s}:main`, "-F", "#{pane_id} #{pane_width} #{pane_height}"], { ok: true })
-      .split("\n").map((l) => l.split(" ")).sort((a, b) => Number(b[1]) * Number(b[2]) - Number(a[1]) * Number(a[2]))[0]?.[0] ?? `${s}:main`;
-    const split = () => out("tmux", ["split-window", "-d", "-P", "-F", "#{pane_id}", "-t", biggest, "-c", cwd, ...envArgs, cmd]);
-    try {
-      pane = split();
-    } catch {
-      // Still no room: grow the window past any attached client, split, then let it follow the client again.
-      out("tmux", ["set-option", "-t", s, "window-size", "manual"], { ok: true });
-      out("tmux", ["resize-window", "-t", `${s}:main`, "-x", "400", "-y", "120"], { ok: true });
+    // The first window with room (shells count too: they take space); none -> a new tab.
+    const cells = cellsByWindow(name);
+    const target = windows(name).find((w) => (cells.get(w.id)?.length ?? 0) < perWindow());
+    if (!target) {
+      pane = out("tmux", ["new-window", "-d", "-P", "-F", "#{pane_id}", "-t", s, "-n", String(windows(name).length + 1), "-c", cwd, ...envArgs, cmd]);
+    } else {
+      // Split the roomiest pane of that window; a small active pane gives "no space for a new pane".
+      const biggest = out("tmux", ["list-panes", "-t", target.id, "-F", "#{pane_id} #{pane_width} #{pane_height}"], { ok: true })
+        .split("\n").map((l) => l.split(" ")).sort((a, b) => Number(b[1]) * Number(b[2]) - Number(a[1]) * Number(a[2]))[0]?.[0] ?? target.id;
+      const split = () => out("tmux", ["split-window", "-d", "-P", "-F", "#{pane_id}", "-t", biggest, "-c", cwd, ...envArgs, cmd]);
       try {
         pane = split();
-      } finally {
-        out("tmux", ["set-option", "-t", s, "window-size", "latest"], { ok: true });
+      } catch {
+        // Still no room: grow the window past any attached client, split, then let it follow the client again.
+        out("tmux", ["set-option", "-t", s, "window-size", "manual"], { ok: true });
+        out("tmux", ["resize-window", "-t", target.id, "-x", "400", "-y", "120"], { ok: true });
+        try {
+          pane = split();
+        } finally {
+          out("tmux", ["set-option", "-t", s, "window-size", "latest"], { ok: true });
+        }
       }
     }
   } else {
-    pane = out("tmux", ["new-session", "-d", "-P", "-F", "#{pane_id}", "-s", s, "-n", "main", "-x", "240", "-y", "70", "-c", cwd, ...envArgs, cmd]);
+    pane = out("tmux", ["new-session", "-d", "-P", "-F", "#{pane_id}", "-s", s, "-n", "1", "-x", "240", "-y", "70", "-c", cwd, ...envArgs, cmd]);
     out("tmux", ["set-option", "-t", s, "pane-border-status", "top"]);
     out("tmux", ["set-option", "-t", s, "pane-border-format", " #{pane_title} "]);
     out("tmux", ["set-option", "-t", s, "allow-set-title", "off"], { ok: true });
+    out("tmux", ["set-option", "-t", s, "automatic-rename", "off"], { ok: true });
   }
   out("tmux", ["select-pane", "-t", pane, "-T", repo]);
   tile(name);
@@ -68,18 +87,22 @@ export function spawnPane(name: string, repo: string, cwd: string, env: Record<s
 
 export const PANEL_TITLE = "my-claude-panel";
 
-// Re-layout the project window: panel column left (if open), everything else tiled.
+// Re-layout every window of the project: panel column left (if open), everything else
+// tiled. A window left with nothing but its panel closes (the panel dies with it).
 export function tile(name: string): void {
   if (name.startsWith("mc-")) name = name.slice(3);
-  const s = sess(name);
   if (!sessionUp(name)) return;
-  const dims = out("tmux", ["display-message", "-p", "-t", `${s}:main`, "#{window_width} #{window_height}"], { ok: true }).split(" ").map(Number);
-  if (dims.length !== 2 || !dims[0]) return;
   const all = panes(name);
-  const panel = all.find((p) => p.title === PANEL_TITLE)?.id ?? null;
-  const cells = all.filter((p) => p.title !== PANEL_TITLE).map((p) => p.id);
-  const l = layout(dims[0], dims[1], panel, cells);
-  if (l) out("tmux", ["select-layout", "-t", `${s}:main`, l], { ok: true });
+  const wins = windows(name);
+  for (const w of wins) {
+    const mine = all.filter((p) => p.window === w.id);
+    const panel = mine.find((p) => p.title === PANEL_TITLE)?.id ?? null;
+    const cells = mine.filter((p) => p.title !== PANEL_TITLE).map((p) => p.id);
+    if (!cells.length && panel && wins.length > 1) { out("tmux", ["kill-window", "-t", w.id], { ok: true }); continue; }
+    if (!w.width) continue;
+    const l = layout(w.width, w.height, panel, cells);
+    if (l) out("tmux", ["select-layout", "-t", w.id, l], { ok: true });
+  }
 }
 
 // Hooks that keep the layout ours, server-wide: a pane dying or being killed, a client
@@ -104,24 +127,27 @@ export function lastDetachedProject(): string | null {
   }
 }
 
+// The panel of the active window (the one the user sees), else any.
 export function panelPane(name: string): string | null {
-  return panes(name).find((p) => p.title === PANEL_TITLE)?.id ?? null;
+  const all = panes(name).filter((p) => p.title === PANEL_TITLE);
+  return (all.find((p) => p.winActive) ?? all[0])?.id ?? null;
 }
 
-// Open the side panel in a project session (left column, unfocused unless asked).
-export function openPanel(name: string, cli: string, focus: boolean): string {
-  const s = sess(name);
-  const have = panelPane(name);
-  if (have) {
-    if (focus) out("tmux", ["select-pane", "-t", have], { ok: true });
-    return have;
+// Every window of the project gets its side panel; returns the active window's.
+export function openPanel(name: string, cli: string, focus: boolean): string | null {
+  const all = panes(name);
+  let opened = false;
+  for (const w of windows(name)) {
+    const mine = all.filter((p) => p.window === w.id);
+    if (mine.some((p) => p.title === PANEL_TITLE)) continue;
+    const first = mine[0]?.id ?? w.id;
+    const id = out("tmux", ["split-window", "-d", "-hb", "-l", "30", "-P", "-F", "#{pane_id}", "-t", first, "-e", `MY_CLAUDE_PANEL_SESSION=${name}`, `${cli} _panel`], { ok: true }).trim();
+    if (id) { out("tmux", ["select-pane", "-t", id, "-T", PANEL_TITLE], { ok: true }); opened = true; }
   }
-  const first = panes(name)[0]?.id ?? `${s}:main`;
-  const id = out("tmux", ["split-window", "-d", "-hb", "-l", "30", "-P", "-F", "#{pane_id}", "-t", first, "-e", `MY_CLAUDE_PANEL_SESSION=${name}`, `${cli} _panel`]).trim();
-  out("tmux", ["select-pane", "-t", id, "-T", PANEL_TITLE], { ok: true });
-  tile(name);
-  if (focus) out("tmux", ["select-pane", "-t", id], { ok: true });
-  return id;
+  if (opened) tile(name);
+  const have = panelPane(name);
+  if (focus && have) out("tmux", ["select-pane", "-t", have], { ok: true });
+  return have;
 }
 
 // The peer pane the user was on before focusing the panel (tmux's "last" pane), else the active one.
@@ -135,11 +161,10 @@ export function focusLast(): void {
 }
 
 export function focusedPeer(name: string): string | null {
-  const lines = out("tmux", ["list-panes", "-t", `${sess(name)}:main`, "-F", "#{pane_active}\t#{pane_last}\t#{pane_title}"], { ok: true }).split("\n");
-  const rows = lines.map((l) => l.split("\t"));
-  const active = rows.find((r) => r[0] === "1");
-  if (active && active[2] !== PANEL_TITLE) return active[2];
-  return rows.find((r) => r[1] === "1" && r[2] !== PANEL_TITLE)?.[2] ?? null;
+  const rows = panes(name).filter((p) => p.winActive);
+  const active = rows.find((r) => r.active);
+  if (active && active.title !== PANEL_TITLE) return active.title;
+  return rows.find((r) => r.last && r.title !== PANEL_TITLE)?.title ?? null;
 }
 
 // Project sessions, in tmux's order.
@@ -166,6 +191,9 @@ function bindCycleKeys(cli: string): void {
   out("tmux", ["bind-key", "h", "run-shell", `${cli} shell-here`], { ok: true });
   // prefix+`: focus the side panel (opening it if closed).
   out("tmux", ["bind-key", "`", "run-shell", `${cli} panel`], { ok: true });
+  // prefix+n / prefix+p: next / previous tab of the project (tmux's own meaning).
+  out("tmux", ["bind-key", "n", "next-window"], { ok: true });
+  out("tmux", ["bind-key", "p", "previous-window"], { ok: true });
   installHooks(cli);
 }
 
@@ -173,7 +201,7 @@ function bindCycleKeys(cli: string): void {
 export function switchTo(name: string, repo?: string): void {
   if (repo) {
     const pane = paneOf(name, repo);
-    if (pane) out("tmux", ["select-pane", "-t", pane], { ok: true });
+    if (pane) { out("tmux", ["select-window", "-t", pane], { ok: true }); out("tmux", ["select-pane", "-t", pane], { ok: true }); }
   }
   out("tmux", ["switch-client", "-t", sess(name)]);
 }
@@ -212,12 +240,13 @@ function floatingPanes(): boolean {
 
 // Every pane of the project's window: peers carry their repo as title, shells "shell:<repo>".
 // tmux 3.8's floating panes (prefix+*) are left out: they belong to no layout.
-export function panes(name: string): { id: string; title: string }[] {
-  const lines = out("tmux", ["list-panes", "-t", `${sess(name)}:main`, "-F", "#{pane_floating_flag}\t#{pane_id}\t#{pane_title}"], { ok: true });
+export interface PaneRow { id: string; title: string; window: string; winActive: boolean; active: boolean; last: boolean; start: number }
+export function panes(name: string): PaneRow[] {
+  const lines = out("tmux", ["list-panes", "-s", "-t", sess(name), "-F", "#{pane_floating_flag}\t#{pane_id}\t#{window_id}\t#{window_active}\t#{pane_active}\t#{pane_last}\t#{pane_start_time}\t#{pane_title}"], { ok: true });
   return lines.split("\n").filter(Boolean).map((l) => {
-    const [fl, id, ...t] = l.split("\t");
-    return fl === "1" ? null : { id, title: t.join("\t") };
-  }).filter((x): x is { id: string; title: string } => x !== null);
+    const [fl, id, win, wa, pa, pl, st, ...t] = l.split("\t");
+    return fl === "1" ? null : { id, title: t.join("\t"), window: win, winActive: wa === "1", active: pa === "1", last: pl === "1", start: Number(st || 0) };
+  }).filter((x): x is PaneRow => x !== null);
 }
 
 // The session's status bar: project on its color, peers (lead marked), how to get back.
@@ -232,9 +261,14 @@ export function applyStatus(name: string, peers: { repo: string; lead: boolean }
   set("status-left-length", "80");
   set("status-left", `#[bg=${color},fg=colour232,bold] ${name} #[bg=colour236,fg=${color}]#[default] ${roster} `);
   set("status-right-length", "60");
-  set("status-right", `#[fg=colour245]prefix+h shell · prefix+Tab next · prefix+d menu #[fg=${color}]█`);
-  set("window-status-format", "");
-  set("window-status-current-format", "");
+  set("status-right", `#[fg=colour245]${windows(name).length > 1 ? "prefix+n/p tab · " : ""}prefix+h shell · prefix+Tab next · prefix+d menu #[fg=${color}]█`);
+  // Tabs appear once the project spans more than one window, each named by its repos.
+  const tabs = windows(name).length > 1;
+  const names = `#{P:#{?#{==:#{pane_title},${PANEL_TITLE}},,#{pane_title} }}`;
+  set("window-status-format", tabs ? `#[fg=colour245] #I #[fg=colour250]${names}` : "");
+  set("window-status-current-format", tabs ? `#[bg=${color},fg=colour232,bold] #I ${names}#[default]` : "");
+  set("window-status-separator", tabs ? "│" : "");
+  set("status-justify", "left");
   set("pane-border-style", "fg=colour238");
   set("pane-active-border-style", `fg=${color}`);
 }
@@ -251,7 +285,7 @@ export function killSession(name: string): void {
 export function attach(name: string, repo?: string): number {
   if (repo) {
     const pane = paneOf(name, repo);
-    if (pane) out("tmux", ["select-pane", "-t", pane]);
+    if (pane) { out("tmux", ["select-window", "-t", pane], { ok: true }); out("tmux", ["select-pane", "-t", pane]); }
   }
   if (process.env.TMUX) return run("tmux", ["switch-client", "-t", sess(name)]);
   return run("tmux", ["attach", "-t", sess(name)]);

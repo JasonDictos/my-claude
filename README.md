@@ -213,6 +213,12 @@ my-claude panel                         focus/open the side panel (bound to pref
 `--shared` puts every peer of a project in **one** container (profile
 permitting) so they share build state; the default is one per repo.
 
+Tabs: a window holds up to `panesPerWindow` peers (config.json, default 6);
+the next one opens a second tmux window in the same session, with its own
+panel column. The status bar then shows the tabs, each named by its repos;
+prefix+n / prefix+p move between them, and a tab whose last peer is removed
+closes by itself.
+
 Mouse: with tmux's `mouse on`, clicking a row in the side panel goes to that
 project and the wheel steps through them. (tmux reports no pointer motion, so
 hovering cannot do anything.) Detaching with prefix+d lands the menu on the
