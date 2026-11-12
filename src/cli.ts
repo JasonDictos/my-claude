@@ -248,7 +248,11 @@ function menuLoop(): number {
         for (const r of core.up(name)) console.log(`${r.repo}: ${r.action}${r.detail ? " " + r.detail : ""}`);
       } catch (e) { console.error(String(e instanceof Error ? e.message : e)); }
       console.log(`attaching to ${name}...`);
+      try { unlinkSync(tmux.LAST_SESSION_FILE); } catch { /* none */ }
       try { core.attach(name, repo || undefined); } catch (e) { console.error(String(e instanceof Error ? e.message : e)); }
+      // Back on the project the user was looking at when they detached, not the one they joined.
+      const last = tmux.lastDetachedProject();
+      if (last && core.ls().some((p) => p.name === last)) open = last;
     }
   }
 }

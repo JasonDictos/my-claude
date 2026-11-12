@@ -1,4 +1,5 @@
 // One tmux session per project (mc-<name>), one window, one titled pane per peer.
+import { readFileSync } from "node:fs";
 import { ok, out, run } from "./sh.ts";
 import { layout } from "./layout.ts";
 
@@ -86,6 +87,21 @@ export function tile(name: string): void {
 export function installHooks(cli: string): void {
   for (const h of ["pane-exited", "after-kill-pane", "client-resized", "client-attached", "client-session-changed"])
     out("tmux", ["set-hook", "-g", h, `run-shell "${cli} _tile '#{session_name}'"`], { ok: true });
+  // Where the client was when it detached (the session may differ from the one it
+  // attached to): the menu reopens that project.
+  out("tmux", ["set-hook", "-g", "client-detached", `run-shell "echo '#{session_name}' > '${LAST_SESSION_FILE}'"`], { ok: true });
+}
+
+export const LAST_SESSION_FILE = `${process.env.XDG_RUNTIME_DIR ?? "/tmp"}/my-claude-last-session`;
+
+// Project the client detached from last, if it was a project session.
+export function lastDetachedProject(): string | null {
+  try {
+    const s = readFileSync(LAST_SESSION_FILE, "utf8").trim();
+    return s.startsWith("mc-") ? s.slice(3) : null;
+  } catch {
+    return null;
+  }
 }
 
 export function panelPane(name: string): string | null {

@@ -33,7 +33,36 @@ function Panel({ session }: { session: string }) {
     return () => { clearInterval(t); clearInterval(snap); };
   }, []);
 
+  // Move the highlight (and the client) to a row, as the arrows do.
+  const selRef = useRef(sel); selRef.current = sel;
+  const goTo = (next: number) => {
+    const l = listRef.current;
+    if (next < 0 || next >= l.length) return;
+    setSel(next);
+    const r = l[next];
+    if (r && r.state !== "DOWN" && r.name !== session) {
+      try { tmux.switchTo(r.name); tmux.focusPanel(r.name); } catch (e) { setMsg(String(e instanceof Error ? e.message : e)); }
+    }
+  };
+  // Mouse (SGR reporting, enabled below): a click on a row goes there, the wheel steps.
+  // tmux has no hover event, so a click is the closest thing to pointing at a project.
+  useEffect(() => {
+    const onData = (d: Buffer) => {
+      for (const m of d.toString("latin1").matchAll(/\x1b\[<(\d+);(\d+);(\d+)M/g)) {
+        const [btn, , y] = [Number(m[1]), Number(m[2]), Number(m[3])];
+        const h = process.stdout.rows || 24;
+        const top = Math.max(0, selRef.current - h + 4);
+        if (btn === 0) goTo(y - 2 + top);
+        else if (btn === 64) goTo(selRef.current - 1);
+        else if (btn === 65) goTo(selRef.current + 1);
+      }
+    };
+    process.stdin.on("data", onData);
+    return () => { process.stdin.off("data", onData); };
+  }, []);
+
   useInput((input, key) => {
+    if (/\[<\d+;\d+;\d+[Mm]/.test(input)) return; // mouse, handled above
     if (add) {
       const v = add.value;
       const c = Math.min(add.cursor, v.length);
@@ -64,15 +93,7 @@ function Panel({ session }: { session: string }) {
     if (key.escape || input === "`") return tmux.focusLast();
     // The highlight IS the view: moving it switches the client to that project's session
     // (its own panel takes over, highlighting itself). A down project waits for Enter.
-    if (key.upArrow || key.downArrow) {
-      const next = key.upArrow ? Math.max(0, sel - 1) : Math.min(list.length - 1, sel + 1);
-      setSel(next);
-      const r = list[next];
-      if (r && r.state !== "DOWN" && r.name !== session) {
-        try { tmux.switchTo(r.name); tmux.focusPanel(r.name); } catch (e) { setMsg(String(e instanceof Error ? e.message : e)); }
-      }
-      return;
-    }
+    if (key.upArrow || key.downArrow) return goTo(key.upArrow ? Math.max(0, sel - 1) : Math.min(list.length - 1, sel + 1));
     if (key.return && list[sel]) {
       const r = list[sel];
       try {
@@ -129,10 +150,11 @@ const session = process.env.MY_CLAUDE_PANEL_SESSION || tmux.currentSession()?.re
 
 // Never outlive the terminal: a pane killed or replaced (respawn-pane) sends HUP and
 // closes the pty; without this the process spins on a dead stdin/stdout.
-const bail = () => { try { process.stdout.write("\x1b[?1049l"); } catch { /* gone */ } process.exit(0); };
+const MOUSE_ON = "\x1b[?1000h\x1b[?1006h", MOUSE_OFF = "\x1b[?1006l\x1b[?1000l";
+const bail = () => { try { process.stdout.write(MOUSE_OFF + "\x1b[?1049l"); } catch { /* gone */ } process.exit(0); };
 for (const sig of ["SIGHUP", "SIGTERM"] as const) process.on(sig, bail);
 process.stdin.on("end", bail); process.stdin.on("error", bail); process.stdout.on("error", bail);
-process.stdout.write("\x1b[?1049h\x1b[H\x1b[2J");
+process.stdout.write("\x1b[?1049h\x1b[H\x1b[2J" + MOUSE_ON);
 const app = render(<Panel session={session} />, { exitOnCtrlC: false });
 await app.waitUntilExit();
-process.stdout.write("\x1b[?1049l");
+process.stdout.write(MOUSE_OFF + "\x1b[?1049l");

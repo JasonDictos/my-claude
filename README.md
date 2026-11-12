@@ -213,6 +213,11 @@ my-claude panel                         focus/open the side panel (bound to pref
 `--shared` puts every peer of a project in **one** container (profile
 permitting) so they share build state; the default is one per repo.
 
+Mouse: with tmux's `mouse on`, clicking a row in the side panel goes to that
+project and the wheel steps through them. (tmux reports no pointer motion, so
+hovering cannot do anything.) Detaching with prefix+d lands the menu on the
+project you were looking at, not the one you joined.
+
 ## Peers can start projects
 
 Every peer's Claude gets a my-claude MCP server (`--mcp-config`, served by
