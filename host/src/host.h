@@ -302,6 +302,7 @@ private:
   QString contextNode();
   void updateToolbar();
   void pressKeys(const QJsonObject& m, QPointer<class QLocalSocket> asker);
+  void pictureOf(const QString& id, std::function<void(QPixmap)> done);
   void showToolbar(bool on);
   void showPreview(class QTreeWidgetItem* it);
   void refreshPreview();

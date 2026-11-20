@@ -48,6 +48,7 @@
 #include <QGridLayout>
 #include <QHelpEvent>
 #include <QPointer>
+#include <QRegularExpression>
 #include <QSysInfo>
 #include <functional>
 #include <QThread>
@@ -204,6 +205,100 @@ public:
     p->restore();
   }
 };
+
+// A pane's screen as tmux holds it (capture-pane -e), drawn: colours, bold, inverse, and the
+// line-drawing cells (SO … SI) as box characters. For a terminal never on screen yet.
+QPixmap drawCapture(const QList<QByteArray>& lines, const QFont& base, const QColor& ink, const QColor& paper) {
+  static const QColor ansi[16] = {QColor("#000000"), QColor("#cd3131"), QColor("#0dbc79"), QColor("#e5e510"), QColor("#2472c8"), QColor("#bc3fbc"),
+                                  QColor("#11a8cd"), QColor("#e5e5e5"), QColor("#666666"), QColor("#f14c4c"), QColor("#23d18b"), QColor("#f5f543"),
+                                  QColor("#3b8eea"), QColor("#d670d6"), QColor("#29b8db"), QColor("#ffffff")};
+  const auto color256 = [&](int n) -> QColor {
+    if (n < 16) return ansi[qBound(0, n, 15)];
+    if (n >= 232) { const int g = 8 + 10 * (n - 232); return QColor(g, g, g); }
+    static const int v[6] = {0, 95, 135, 175, 215, 255};
+    n -= 16;
+    return QColor(v[n / 36], v[(n / 6) % 6], v[n % 6]);
+  };
+  static const QHash<char, QString> acs{{'q', "─"}, {'x', "│"}, {'l', "┌"}, {'k', "┐"}, {'m', "└"}, {'j', "┘"}, {'t', "├"}, {'u', "┤"},
+                                         {'v', "┴"}, {'w', "┬"}, {'n', "┼"}, {'a', "▒"}, {'`', "◆"}, {'~', "·"}, {'o', "⎺"}, {'s', "⎽"}};
+  struct Run { QString text; QColor fg, bg; bool bold = false; };
+  QList<QList<Run>> rows;
+  int width = 0;
+  for (const QByteArray& raw : lines) {
+    QList<Run> runs;
+    QColor fg, bg;
+    bool bold = false, inverse = false, lineDraw = false;
+    QString text;
+    int cols = 0;
+    const auto flush = [&] {
+      if (text.isEmpty()) return;
+      QColor f = fg.isValid() ? fg : ink, b = bg;
+      if (inverse) { const QColor t = f; f = b.isValid() ? b : paper; b = t; }
+      runs << Run{text, f, b, bold};
+      cols += text.size();
+      text.clear();
+    };
+    const QString line = QString::fromUtf8(raw);
+    for (int i = 0; i < line.size(); ++i) {
+      const QChar c = line[i];
+      if (c == QChar(0x1b) && i + 1 < line.size() && line[i + 1] == '[') {
+        int j = i + 2;
+        while (j < line.size() && !(line[j] >= '@' && line[j] <= '~')) ++j;
+        if (j < line.size() && line[j] == 'm') {
+          flush();
+          const QStringList ps = line.mid(i + 2, j - i - 2).split(QRegularExpression("[;:]"));
+          for (int k = 0; k < ps.size(); ++k) {
+            const int p = ps[k].isEmpty() ? 0 : ps[k].toInt();
+            if (p == 0) { fg = bg = QColor(); bold = inverse = false; }
+            else if (p == 1) bold = true;
+            else if (p == 22) bold = false;
+            else if (p == 7) inverse = true;
+            else if (p == 27) inverse = false;
+            else if (p >= 30 && p <= 37) fg = ansi[p - 30];
+            else if (p >= 90 && p <= 97) fg = ansi[p - 90 + 8];
+            else if (p >= 40 && p <= 47) bg = ansi[p - 40];
+            else if (p >= 100 && p <= 107) bg = ansi[p - 100 + 8];
+            else if (p == 39) fg = QColor();
+            else if (p == 49) bg = QColor();
+            else if ((p == 38 || p == 48) && k + 1 < ps.size()) {
+              QColor& to = p == 38 ? fg : bg;
+              if (ps[k + 1] == "5" && k + 2 < ps.size()) { to = color256(ps[k + 2].toInt()); k += 2; }
+              else if (ps[k + 1] == "2" && k + 4 < ps.size()) { to = QColor(ps[k + 2].toInt(), ps[k + 3].toInt(), ps[k + 4].toInt()); k += 4; }
+            }
+          }
+        }
+        i = j;
+        continue;
+      }
+      if (c == QChar(0x0e)) { lineDraw = true; continue; }
+      if (c == QChar(0x0f)) { lineDraw = false; continue; }
+      if (c.unicode() < 0x20) continue;
+      text += lineDraw && c.unicode() < 0x80 && acs.contains(char(c.unicode())) ? acs.value(char(c.unicode())) : QString(c);
+    }
+    flush();
+    width = qMax(width, cols);
+    rows << runs;
+  }
+  QFont bold = base;
+  bold.setBold(true);
+  const QFontMetrics fm(base);
+  const int cw = qMax(1, fm.horizontalAdvance(QLatin1Char('M'))), lh = fm.height();
+  QPixmap pm(qMax(1, width) * cw, qMax(1, int(rows.size())) * lh);
+  pm.fill(paper);
+  QPainter p(&pm);
+  for (int r = 0; r < rows.size(); ++r) {
+    int x = 0;
+    for (const Run& run : rows[r]) {
+      const int w = run.text.size() * cw;
+      if (run.bg.isValid()) p.fillRect(x, r * lh, w, lh, run.bg);
+      p.setFont(run.bold ? bold : base);
+      p.setPen(run.fg);
+      p.drawText(QRect(x, r * lh, w + cw, lh), Qt::AlignLeft | Qt::AlignVCenter, run.text);
+      x += w;
+    }
+  }
+  return pm;
+}
 
 QJsonArray tagTree(const QJsonArray& nodes, const QString& tag, bool top) {
   QJsonArray out;
@@ -2054,6 +2149,22 @@ void Host::setTree(const QJsonArray& nodes) {
   updateToolbar();
 }
 
+// A terminal's picture now, for a preview: its widget when it has been drawn; a pane never on
+// screen has painted nothing, so tmux's own screen of it is drawn instead.
+void Host::pictureOf(const QString& id, std::function<void(QPixmap)> done) {
+  if (!terms_.contains(id)) return;
+  const Term& t = terms_[id];
+  if (t.widget->width() > 40 && (!t.native || t.seeded)) { done(t.widget->grab()); return; }
+  TmuxControl* c = t.native ? controls_.value(t.session) : nullptr;
+  if (!c) { done(QPixmap()); return; }
+  QPointer<Host> self = this;
+  c->command("capture-pane -e -N -p -t " + t.pane, // -N: trailing spaces too, so the picture has the pane's width
+                [self, id, done](bool ok, const QList<QByteArray>& lines) {
+    if (!self || !ok || !self->terms_.contains(id)) return;
+    done(drawCapture(lines, self->termFont(), QColor("#d4d7dd"), theme::terminalBackground(QColor(self->terms_[id].color), 0, 0.35)));
+  });
+}
+
 // A test's key press (the `key` request); `asker` may be gone by the time there is an answer.
 void Host::pressKeys(const QJsonObject& m, QPointer<QLocalSocket> asker) {
   activateWindow();
@@ -2147,16 +2258,14 @@ void Host::showPreview(QTreeWidgetItem* it) {
 // What the terminal shows now, drawn small; it keeps drawing while hidden, so off-screen panes show too.
 void Host::refreshPreview() {
   if (!preview_ || !terms_.contains(previewId_)) { hidePreview(); return; }
-  QWidget* w = terms_[previewId_].widget;
-  const QPixmap pm = w->size().width() > 40 ? w->grab() : QPixmap();
-  if (pm.isNull()) previewPic_->setText("not drawn yet");
-  else {
+  pictureOf(previewId_, [this](const QPixmap& pm) {
+    if (!preview_ || pm.isNull()) return;
     const qreal dpr = previewPic_->devicePixelRatioF();
     QPixmap fit = pm.scaledToWidth(int(qMin(560.0, pm.width() / pm.devicePixelRatioF()) * dpr), Qt::SmoothTransformation);
     fit.setDevicePixelRatio(dpr);
     previewPic_->setPixmap(fit);
-  }
-  preview_->adjustSize();
+    preview_->adjustSize();
+  });
 }
 
 // Every open terminal at once, live, in a grid over the window; a click goes to one.
@@ -2211,15 +2320,15 @@ void Host::refreshOverview() {
   if (!overview_) return;
   for (auto it = overviewPics_.begin(); it != overviewPics_.end(); ++it) {
     if (!terms_.contains(it.key())) continue;
-    QWidget* w = terms_[it.key()].widget;
-    const QPixmap pm = w->size().width() > 40 ? w->grab() : QPixmap();
-    if (pm.isNull()) it.value()->setText("not drawn yet");
-    else { // to the tile's size in device pixels, or a high-DPI screen shows it small
-      const qreal dpr = it.value()->devicePixelRatioF();
-      QPixmap fit = pm.scaled(it.value()->size() * dpr, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    QPointer<QLabel> pic = it.value();
+    pictureOf(it.key(), [pic](const QPixmap& pm) {
+      if (!pic || pm.isNull()) return;
+      // to the tile's size in device pixels, or a high-DPI screen shows it small
+      const qreal dpr = pic->devicePixelRatioF();
+      QPixmap fit = pm.scaled(pic->size() * dpr, Qt::KeepAspectRatio, Qt::SmoothTransformation);
       fit.setDevicePixelRatio(dpr);
-      it.value()->setPixmap(fit);
-    }
+      pic->setPixmap(fit);
+    });
   }
 }
 
