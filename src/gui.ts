@@ -573,7 +573,7 @@ class Driver {
     actions.push(act("project.ticket", "Ticket…", "t"), act("project.goal", "Goal…", "g"), act("project.color", "Color…"),
       act("project.readd", "Re-add a removed repo…", "U", (p.removed ?? []).length > 0), sep);
     if (s.up) actions.push(act("project.down", "Bring down…", "d"));
-    actions.push(act("project.delete", "Delete project…", "x"));
+    actions.push(act("project.rename", "Rename… (F2)"), act("project.delete", "Delete project…", "x"));
 
     const peerNode = (peer: core.PeerSnap): Dict => {
       const shells = s.panes.filter((x) => x.title !== tmux.PANEL_TITLE && core.shellRepo(tmux.label(x)) === peer.repo);
@@ -584,25 +584,26 @@ class Driver {
         act("peer.restart", "Relaunch…", "R", s.up && peer.state !== "occupied"), act("peer.index", "Rebuild symbol index", "i"), sep,
         act("peer.lead", peer.repo === p.lead ? "Change the goal…" : "Make lead…", "l"), act("peer.model", "Model…", "m")];
       if (peer.state === "occupied") pa.push(act("peer.takeover", "Take over (stop the session holding it)…"));
-      pa.push(sep, act("peer.rename", "Rename…", "n"), act("peer.remove", "Remove from project…", "x"));
+      pa.push(sep, act("peer.rename", "Rename… (F2)"), act("peer.remove", "Remove from project…", "x"));
       return {
         // greyed while its Claude is not running here
         // a terminal like its shells (docker or not); a plain folder (a home directory) shows its path
         id: `r:${name}/${peer.repo}`, label: (peer.label || (isRepo(peer.path) ? peer.repo : `${tilde(peer.path)}/`)) + (peer.repo === p.lead ? " ★" : ""), icon: boxed ? "container" : "terminal",
+        name: peer.label || (isRepo(peer.path) ? peer.repo : `${tilde(peer.path)}/`),
         dim: peer.state === "down" || peer.state === "occupied",
         badge: attnBadge(peer.attn), badgeColor: attnColor(peer.attn), actions: pa,
         tooltip: `${tilde(peer.path)}\n${peer.state}${peer.model ? " · " + peer.model : ""} · conversation ${peer.session.slice(0, 8)}`,
         // under its repo a shell needs no name of its own: a terminal icon, and where it runs
         children: shells.map((x) => {
           const inBox = !tmux.label(x).startsWith("host:") && boxed;
-          return { id: `t:${name}/${x.id}`, label: x.name || (inBox ? "container shell" : "host shell"), icon: inBox ? "container" : "terminal", tooltip: tmux.label(x), color: SHELL_COLOR,
-            actions: [act("pane.focus", "Go to it"), act("pane.rename", "Rename…", "n"), act("pane.close", "Close…", "x")] };
+          return { id: `t:${name}/${x.id}`, label: x.name || (inBox ? "container shell" : "host shell"), name: x.name || (inBox ? "container shell" : "host shell"), icon: inBox ? "container" : "terminal", tooltip: tmux.label(x), color: SHELL_COLOR,
+            actions: [act("pane.focus", "Go to it"), act("pane.rename", "Rename… (F2)"), act("pane.close", "Close…", "x")] };
         }),
       };
     };
     const chat = s.panes.find((x) => tmux.label(x) === `chat:${name}`);
     return {
-      id: `p:${name}`, label: name, color: s.color,
+      id: `p:${name}`, label: p.label || name, name: p.label || name, color: s.color,
       badge: attnBadge(s.attn), badgeColor: attnColor(s.attn), actions,
       tooltip: [p.goal ? `Goal: ${p.goal.split("\n")[0].slice(0, 160)}` : "", p.ticket ? `Ticket: ${p.ticket}` : "", `${p.mode === "shared" ? "one shared container" : "a container per repo"} · profile ${p.profile} · ${s.state}`].filter(Boolean).join("\n"),
       children: [...s.peers.map(peerNode), ...(chat ? [{ id: `t:${name}/${chat.id}`, label: "chat", color: CHAT_COLOR, actions: [act("pane.focus", "Go to it"), act("pane.close", "Leave the chat…", "x")] }] : [])],
@@ -824,6 +825,7 @@ class Driver {
       case "select": this.go(String(ev.node), false); break;
       case "activate": this.go(String(ev.node), true); break;
       case "action": void this.onAction(ev).catch((e) => this.fail(e)); break;
+      case "rename": void this.onRename(String(ev.node ?? ""), String(ev.name ?? "")).catch((e) => this.fail(e, "rename")); break;
       case "settings": try { this.saveSettings(ev.values ?? {}); } catch (e) { this.fail(e, "settings"); } break;
       case "settings-open": this.send({ op: "settings", ...this.settingsSpec(), open: true }); break;
       case "quit": log("window closed"); this.flushPrefs(); this.releaseAll(); process.exit(0);
@@ -903,6 +905,17 @@ class Driver {
     this.show(name);
   }
 
+  // A name typed over an entry (F2): its display name, the default again when emptied.
+  private async onRename(node: string, raw: string): Promise<void> {
+    const label = raw.trim().slice(0, 64);
+    let m: RegExpExecArray | null;
+    if ((m = /^p:([^/]+)$/.exec(node))) core.renameProject(m[1], label);
+    else if ((m = /^r:([^/]+)\/(.+)$/.exec(node))) core.renamePeer(m[1], m[2], label);
+    else if ((m = /^t:[^/]+\/(%\d+)$/.exec(node))) await tmux.renamePane(m[1], label);
+    else return;
+    await this.sync();
+  }
+
   private async onAction(ev: Dict): Promise<void> {
     const a = String(ev.action);
     const t = this.target(ev);
@@ -956,19 +969,9 @@ class Driver {
       case "peer.lead": return this.peerLead(name, peer());
       case "peer.model": return this.peerModel(name, peer());
       case "peer.takeover": return this.peerTakeover(name, peer());
-      case "peer.rename": {
-        const repo = peer(), cur = this.snap(name)?.project.peers.find((x) => x.repo === repo)?.label ?? "";
-        const v = await this.ask({ title: `Rename ${repo}`, ok: "Rename", text: "What the list calls it. Empty: its repo name again.", schema: { type: "object", properties: { label: { type: "string", title: "Name" } } }, values: { label: cur } });
-        if (v) { core.renamePeer(name, repo, String(v.label ?? "")); void this.sync(); }
+      case "project.rename": case "peer.rename": case "pane.rename": // F2's editor, in place
+        if (ev.node) this.send({ op: "edit", node: String(ev.node) });
         return;
-      }
-      case "pane.rename": {
-        if (!t.pane) return;
-        const cur = this.snap(name)?.panes.find((x) => x.id === t.pane)?.name ?? "";
-        const v = await this.ask({ title: "Rename", ok: "Rename", text: "What the list calls this shell. Empty: back to the default.", schema: { type: "object", properties: { label: { type: "string", title: "Name" } } }, values: { label: cur } });
-        if (v) { await tmux.renamePane(t.pane, String(v.label ?? "").trim()); void this.sync(); }
-        return;
-      }
       case "peer.remove": return this.peerRemove(name, peer());
       case "pane.focus": if (t.pane) this.send({ op: "focus", id: `${name}/${t.pane}` }); return;
       case "pane.close": return this.paneClose(project(), t);

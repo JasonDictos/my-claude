@@ -798,6 +798,13 @@ export async function snapshot(): Promise<ProjectSnap[]> {
   }));
 }
 
+// What the window calls a project; empty: its name again.
+export function renameProject(name: string, label: string): void {
+  const p = load(name);
+  if (label.trim()) p.label = label.trim().slice(0, 64); else delete p.label;
+  save(p);
+}
+
 // What the window calls a peer; empty: its repo (or path) again.
 export function renamePeer(name: string, repo: string, label: string): void {
   const p = load(name);

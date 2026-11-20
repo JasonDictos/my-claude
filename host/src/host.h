@@ -283,6 +283,13 @@ private:
   class QLabel* caption_ = nullptr; // this machine's section header ("PROJECTS @ <host>")
   bool hereFolded_ = false;
   bool menuHover_ = false; // the mouse moved over the Alt-shown menu bar
+  class QLabel* preview_ = nullptr; // a terminal, live, while the mouse rests on its entry
+  QTimer* previewTimer_ = nullptr;
+  QString previewId_;
+  QString termOfNode(const QString& node) const;
+  void showPreview(class QTreeWidgetItem* it);
+  void refreshPreview();
+  void hidePreview();
   void foldHere(bool fold);
   int openSections() const;
   void setTree(const QJsonArray& nodes);

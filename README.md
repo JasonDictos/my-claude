@@ -216,7 +216,10 @@ tests/gui-demo.sh          # try it in a sandbox: temp HOME, fake claude, privat
   four are on screen (`gui.panesPerGroup`); a project with more shows them in groups,
   listed under the grid. `Ctrl+Shift+Tab` walks through every pane, group after group.
   Neighbouring panes take two shades, so it shows where one ends.
-- **The list on the left** is every project with its repos and agents under it. It marks
+- **The list on the left** is grouped by machine ("PROJECTS @ host"), every project with its
+  repos and shells under it, each with an icon for where it runs (a console, or a docker
+  console). Rest the mouse on one to see its terminal live; **F2** renames it (empty: its
+  default name again). It marks
   the pane the keyboard is in; walking it (`` Ctrl+` ``, arrows) brings what it points at
   on screen, Enter or a click goes there, a double-click on a stopped project starts it.
   Each entry's menu (right-click, or its letter) is what the old menu had.
@@ -255,6 +258,7 @@ Keys, all changeable in Settings → Shortcuts (stored as `gui.keys` in `setting
 | `Ctrl+Shift+R` | relaunch a peer |
 | `Ctrl+Shift+C`, `Ctrl+Shift+V` | copy, paste (selecting text copies it too; right-click → Paste) |
 | `Ctrl+Shift+F` | find in scrollback |
+| `F2` (in the list) | rename the entry |
 | `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | this pane's text bigger / smaller / normal (`Ctrl+Shift+` the same for all panes) |
 | `Shift+PgUp/PgDn`, the wheel | scroll |
 | `F1` (hold it: on the window) | every key |

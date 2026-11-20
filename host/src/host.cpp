@@ -42,7 +42,9 @@
 #include <QTabWidget>
 #include <QTest>
 #include <QStyledItemDelegate>
+#include <QLineEdit>
 #include <QSysInfo>
+#include <functional>
 #include <QThread>
 #include <QTimer>
 #include <QStyle>
@@ -151,12 +153,26 @@ QString tagOf(const QString& s) {
   const int at = project.lastIndexOf('@');
   return at < 0 ? QString() : project.mid(at + 1);
 }
-const int kHostRole = Qt::UserRole + 2, kSectionRole = Qt::UserRole + 3, kKindRole = Qt::UserRole + 4;
+const int kHostRole = Qt::UserRole + 2, kSectionRole = Qt::UserRole + 3, kKindRole = Qt::UserRole + 4, kNameRole = Qt::UserRole + 5;
 
 // Another machine's section row, like the caption: "PROJECTS @ " small and grey, the host bold white.
 class SectionDelegate : public QStyledItemDelegate {
 public:
   using QStyledItemDelegate::QStyledItemDelegate;
+  // F2: the entry's name edited in place; the new one (empty: its default) goes to its driver
+  std::function<void(const QString& node, const QString& name)> renamed;
+  QWidget* createEditor(QWidget* parent, const QStyleOptionViewItem&, const QModelIndex&) const override {
+    auto* e = new QLineEdit(parent);
+    e->setMaxLength(64);
+    return e;
+  }
+  void setEditorData(QWidget* editor, const QModelIndex& idx) const override {
+    if (auto* e = qobject_cast<QLineEdit*>(editor)) { e->setText(idx.data(kNameRole).toString()); e->selectAll(); }
+  }
+  void setModelData(QWidget* editor, QAbstractItemModel*, const QModelIndex& idx) const override {
+    // the list shows the name the driver sends back, not what was typed
+    if (auto* e = qobject_cast<QLineEdit*>(editor); e && renamed) renamed(idx.data(Qt::UserRole).toString(), e->text().trimmed());
+  }
   void paint(QPainter* p, const QStyleOptionViewItem& opt, const QModelIndex& idx) const override {
     if (!idx.data(kSectionRole).toBool()) { QStyledItemDelegate::paint(p, opt, idx); return; }
     QStyleOptionViewItem o(opt);
@@ -264,7 +280,19 @@ Host::Host(const QString& socketPath, const QString& driverCmd, QWidget* parent)
   connect(caption, &QWidget::customContextMenuRequested, this, [this, caption](const QPoint& p) { QMenu* m = createPopupMenu(); m->exec(caption->mapToGlobal(p)); m->deleteLater(); });
   tree_ = new QTreeWidget(dock_);
   tree_->setColumnCount(2);
-  tree_->setItemDelegateForColumn(0, new SectionDelegate(tree_));
+  {
+    auto* del = new SectionDelegate(tree_);
+    del->renamed = [this](const QString& node, const QString& name) { emitEvent({{"ev", "rename"}, {"node", node}, {"name", name}}); };
+    tree_->setItemDelegateForColumn(0, del);
+    tree_->setEditTriggers(QAbstractItemView::EditKeyPressed); // F2; a double-click opens
+  }
+  // resting the mouse on a repo or shell shows its terminal, live, beside the list
+  tree_->setMouseTracking(true);
+  tree_->viewport()->installEventFilter(this);
+  connect(tree_, &QTreeWidget::itemEntered, this, [this](QTreeWidgetItem* it, int) { showPreview(it); });
+  previewTimer_ = new QTimer(this);
+  previewTimer_->setInterval(333);
+  connect(previewTimer_, &QTimer::timeout, this, &Host::refreshPreview);
   tree_->setHeaderHidden(true);
   tree_->setIndentation(14);
   tree_->setUniformRowHeights(true);
@@ -548,7 +576,7 @@ void Host::reply(QLocalSocket* to, const QJsonObject& msg) {
 void Host::emitEvent(const QJsonObject& ev) {
   // What the user does while the driver is away (it is restarting) is kept for it: a
   // click must not vanish because it landed in that half second.
-  static const QSet<QString> user{"action", "activate", "select", "tab-close", "settings", "settings-open", "nudge"};
+  static const QSet<QString> user{"action", "activate", "select", "tab-close", "settings", "settings-open", "nudge", "rename"};
   if (!driverSock_ && !driverCmd_.isEmpty() && user.contains(ev.value("ev").toString()) && held_.size() < 64) held_ << ev;
   const auto all = clients_; // a handler may drop a client while we write
   for (QLocalSocket* s : all) {
@@ -718,6 +746,10 @@ void Host::handle(const QJsonObject& m, QLocalSocket* from) {
   if (op == "sidebar") { if (m.contains("select")) selectNode(m.value("select").toString()); else sidebarFocus(); return; }
   if (op == "menu") { setMenus(m.value("menus").toArray()); return; }
   if (op == "ask") { ask(m); return; }
+  if (op == "edit") { // rename an entry in place, as F2 does
+    if (QTreeWidgetItem* it = nodeItems_.value(m.value("node").toString())) { tree_->setCurrentItem(it); tree_->setFocus(); tree_->editItem(it, 0); }
+    return;
+  }
   if (op == "fill") { // choices that were still loading when the dialog opened
     if (FormDialog* d = asks_.value(id)) d->setChoices(m.value("key").toString(), m.value("enum").toArray(), m.value("enumLabels").toArray(), m.value("note").toString(), m.value("enumRows").toArray());
     return;
@@ -1962,6 +1994,7 @@ void Host::setTree(const QJsonArray& nodes) {
     it->setText(0, n.value("label").toString());
     if (n.contains("section")) { it->setData(0, kSectionRole, true); it->setData(0, kHostRole, n.value("section").toString()); }
     if (id.startsWith("p:")) { QFont f = it->font(0); f.setBold(true); it->setFont(0, f); } // a project: bold in its colour
+    if (n.contains("name")) { it->setFlags(it->flags() | Qt::ItemIsEditable); it->setData(0, kNameRole, n.value("name").toString()); }
     if (n.contains("icon")) { it->setData(0, kKindRole, n.value("icon").toString()); it->setIcon(0, kindIcon(n.value("icon").toString())); }
     it->setText(1, n.value("badge").toString());
     it->setToolTip(0, n.value("tooltip").toString());
@@ -1983,6 +2016,45 @@ void Host::setTree(const QJsonArray& nodes) {
   tree_->blockSignals(false);
   tree_->setUpdatesEnabled(true);
   if (hadFocus) tree_->setFocus();
+}
+
+// The terminal a list entry stands for: a shell's own, or the pane a peer's entry marks.
+QString Host::termOfNode(const QString& node) const {
+  if (node.startsWith("t:") && terms_.contains(node.mid(2))) return node.mid(2);
+  for (auto it = terms_.constBegin(); it != terms_.constEnd(); ++it) if (it->node == node) return it.key();
+  return {};
+}
+
+void Host::showPreview(QTreeWidgetItem* it) {
+  const QString id = it ? termOfNode(it->data(0, Qt::UserRole).toString()) : QString();
+  const bool editing = qobject_cast<QLineEdit*>(QApplication::focusWidget()) && tree_->isAncestorOf(QApplication::focusWidget()); // F2 at work
+  if (id.isEmpty() || editing) { hidePreview(); return; }
+  if (!preview_) {
+    preview_ = new QLabel(this, Qt::ToolTip | Qt::FramelessWindowHint);
+    preview_->setStyleSheet("QLabel { background: #0d0f12; border: 1px solid #4a5160; padding: 2px; }");
+  }
+  previewId_ = id;
+  refreshPreview();
+  const QRect r = tree_->visualItemRect(it);
+  preview_->move(tree_->viewport()->mapToGlobal(QPoint(tree_->viewport()->width() + 8, r.top())));
+  preview_->show();
+  previewTimer_->start();
+}
+
+// What the terminal shows now, drawn small; it keeps drawing while hidden, so off-screen panes show too.
+void Host::refreshPreview() {
+  if (!preview_ || !terms_.contains(previewId_)) { hidePreview(); return; }
+  QWidget* w = terms_[previewId_].widget;
+  const QPixmap pm = w->size().width() > 40 ? w->grab() : QPixmap();
+  if (pm.isNull()) { preview_->setText("  not drawn yet  "); preview_->adjustSize(); return; }
+  preview_->setPixmap(pm.scaledToWidth(qMin(560, pm.width()), Qt::SmoothTransformation));
+  preview_->adjustSize();
+}
+
+void Host::hidePreview() {
+  if (previewTimer_) previewTimer_->stop();
+  if (preview_) preview_->hide();
+  previewId_.clear();
 }
 
 // A node's actions as a menu; for a pane's header also what the window itself can do to it.
@@ -2053,6 +2125,8 @@ void Host::sidebarFocus() {
 // Keys in the sidebar: Esc goes back to the pane, Enter activates, and a single letter
 // runs the selected entry's action with that key (the old menu's a, x, u, d...).
 bool Host::eventFilter(QObject* o, QEvent* e) {
+  if (tree_ && o == tree_->viewport() && (e->type() == QEvent::Leave || (e->type() == QEvent::MouseMove && !tree_->itemAt(static_cast<QMouseEvent*>(e)->position().toPoint()))))
+    hidePreview();
   if (e->type() == QEvent::MouseMove && !menuPersist_ && menuBar()->isVisible()) {
     menuHide_->start(); // still being used
     if (o == menuBar()) menuHover_ = true; // moved onto it: not just a pointer that happened to be there

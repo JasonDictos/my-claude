@@ -24,6 +24,7 @@ export interface Peer {
 
 export interface Project {
   name: string;
+  label?: string; // what the window calls it, when the user renamed it
   goal: string;
   mode: Mode;
   profile: string;

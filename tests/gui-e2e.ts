@@ -325,6 +325,15 @@ await u.shows("the menu bar back for good", (x) => x.menuBar === true, 3000);
   if (kept.gui?.paneSchemes?.["demo/r1"] !== "Solarized" || kept.gui?.paneText?.["demo/r1"] !== 3) fail("the pane's scheme and text size should be kept in settings.json", kept.gui);
 }
 
+// --- renaming in the list (what F2 sends): a display name; emptied, the default again
+u.send({ op: "emit", event: { ev: "rename", node: "p:demo", name: "Demo One" } });
+await u.shows("the project renamed", (x) => x.nodes.some((n: any) => n.id === "p:demo" && n.label === "Demo One"));
+u.send({ op: "emit", event: { ev: "rename", node: "p:demo", name: "" } });
+await u.shows("its own name back", (x) => x.nodes.some((n: any) => n.id === "p:demo" && n.label === "demo"));
+u.send({ op: "emit", event: { ev: "rename", node: "r:demo/r2", name: "the web one" } });
+await u.shows("the peer renamed", (x) => x.nodes.some((n: any) => n.id === "r:demo/r2" && n.label.startsWith("the web one")));
+if (record("demo").peers.find((x: any) => x.repo === "r2")?.label !== "the web one") fail("the peer's display name should be in its record", record("demo").peers);
+
 // --- settings are settings.json, merged
 u.send({ op: "emit", event: { ev: "settings", values: { general: { profile: "host", defaultOrg: "acme", chatName: "", peersCli: "/nonexistent/claude-peers-cli", panesPerWindow: 6, panel: true }, window: { font: "", fontSize: 0, scheme: "", openOnStart: true } } } });
 const cfgFile = join(process.env.HOME!, ".config", "my-claude", "settings.json");
