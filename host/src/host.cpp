@@ -2211,6 +2211,13 @@ void Host::revealFirst() {
 
 void Host::showInFront() {
   revealed_ = true;
+  // Wayland lets no window take the focus by itself, but focuses one mapped anew: so a window
+  // on screen without the focus is shown again rather than raised
+  if (QGuiApplication::platformName() == "wayland" && isVisible() && !isActiveWindow()) {
+    hide();
+    QTimer::singleShot(40, this, [this] { showFullScreen(); raise(); activateWindow(); focusCurrent(); });
+    return;
+  }
   showFullScreen();
   raise();
   activateWindow();
