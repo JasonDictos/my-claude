@@ -666,7 +666,7 @@ class Driver {
         item("host.paste", "Paste", ["Ctrl+Shift+V"]), item("host.copy", "Copy the selection", ["Ctrl+Shift+C"]),
         item("host.find", "Find in scrollback…", ["Ctrl+Shift+F"]), item("host.scroll-end", "Scroll to the end", ["Ctrl+Shift+End"]), item("host.clear-scrollback", "Clear scrollback")] },
       { title: "&View", items: [
-        item("host.sidebar-toggle", "Show/hide the projects sidebar", ["Ctrl+H"]), item("host.toolbar", "Toolbar over the list"), item("host.fullscreen", "Full screen", ["F11"]), sep,
+        item("host.sidebar-toggle", "Show/hide the projects sidebar", ["Ctrl+H"]), item("host.toolbar", "Toolbar over the list"), item("host.overview", "Overview: every terminal at once", ["Meta+Shift+W"]), item("host.fullscreen", "Full screen", ["F11"]), sep,
         item("host.pane-text-bigger", "This pane: bigger text", ["Ctrl+=", "Ctrl++"]), item("host.pane-text-smaller", "This pane: smaller text", ["Ctrl+-"]),
         item("host.pane-text-reset", "This pane: normal text size", ["Ctrl+0"]), sep,
         item("host.font-bigger", "All panes: bigger text", ["Ctrl+Shift+="]), item("host.font-smaller", "All panes: smaller text", ["Ctrl+Shift+-"]), item("host.font-reset", "All panes: normal text size", ["Ctrl+Shift+0"])] },

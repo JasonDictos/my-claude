@@ -9,6 +9,7 @@
 #include <QLabel>
 #include <QList>
 #include <QMainWindow>
+#include <QPointer>
 #include <QElapsedTimer>
 #include <QProcessEnvironment>
 #include <QSet>
@@ -283,7 +284,15 @@ private:
   class QLabel* caption_ = nullptr; // this machine's section header ("PROJECTS @ <host>")
   bool hereFolded_ = false;
   bool menuHover_ = false; // the mouse moved over the Alt-shown menu bar
-  class QLabel* preview_ = nullptr; // a terminal, live, while the mouse rests on its entry
+  class QFrame* preview_ = nullptr; // a terminal, live, while the mouse rests on its entry
+  class QLabel* previewHead_ = nullptr;
+  class QLabel* previewPic_ = nullptr;
+  QWidget* overview_ = nullptr; // every terminal at once (Meta+Shift+W)
+  QTimer* overviewTimer_ = nullptr;
+  QHash<QString, class QLabel*> overviewPics_;
+  void showOverview();
+  void refreshOverview();
+  void closeOverview();
   QTimer* previewTimer_ = nullptr;
   QString previewId_;
   QString termOfNode(const QString& node) const;
@@ -292,6 +301,7 @@ private:
   QHash<QString, QSet<QString>> nodeCan_; // per list entry: the toolbar buttons that apply
   QString contextNode();
   void updateToolbar();
+  void pressKeys(const QJsonObject& m, QPointer<class QLocalSocket> asker);
   void showToolbar(bool on);
   void showPreview(class QTreeWidgetItem* it);
   void refreshPreview();

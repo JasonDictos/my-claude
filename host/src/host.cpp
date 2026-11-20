@@ -45,6 +45,9 @@
 #include <QLineEdit>
 #include <QToolBar>
 #include <QFile>
+#include <QGridLayout>
+#include <QHelpEvent>
+#include <QPointer>
 #include <QSysInfo>
 #include <functional>
 #include <QThread>
@@ -557,8 +560,8 @@ void Host::onConnection() {
 }
 
 void Host::onReadyRead(QLocalSocket* s) {
-  QByteArray& buf = buffers_[s];
-  buf += s->readAll();
+  // a copy, not a reference into buffers_: a request can change the table (another client leaves)
+  QByteArray buf = buffers_.take(s) + s->readAll();
   for (int nl = buf.indexOf('\n'); nl >= 0; nl = buf.indexOf('\n')) {
     const QByteArray line = buf.left(nl).trimmed();
     buf.remove(0, nl + 1);
@@ -587,10 +590,12 @@ void Host::onReadyRead(QLocalSocket* s) {
     handle(msg, s);
     if (!clients_.contains(s)) return; // a request may end the connection
   }
+  if (!buf.isEmpty()) buffers_.insert(s, buf); // half a line: the rest comes later
 }
 
 void Host::reply(QLocalSocket* to, const QJsonObject& msg) {
-  if (!to || to->state() != QLocalSocket::ConnectedState) return;
+  // only a client still connected: one that left while a request ran is already deleted
+  if (!to || !clients_.contains(to) || to->state() != QLocalSocket::ConnectedState) return;
   to->write(QJsonDocument(msg).toJson(QJsonDocument::Compact) + "\n");
   to->flush(); // events must not wait for the loop: a crash right after would lose them
 }
@@ -868,20 +873,9 @@ void Host::handle(const QJsonObject& m, QLocalSocket* from) {
     // Tests press keys the way the keyboard does: through the window system's shortcut
     // handling, with whatever has focus getting its say first (a terminal does).
     if (!qEnvironmentVariableIsSet("MC_TERM_TEST")) { reply(from, {{"ev", "error"}, {"error", "key needs MC_TERM_TEST"}}); return; }
-    activateWindow();
-    if (m.contains("hold")) { // held down that long, then let go (the reply comes after)
-      const QKeyCombination kc = QKeySequence(m.value("keys").toString())[0];
-      QWidget* target = QApplication::focusWidget() ? QApplication::focusWidget() : this;
-      QTest::keyPress(target, kc.key(), kc.keyboardModifiers());
-      const int ms = m.value("hold").toInt();
-      QTimer::singleShot(ms, this, [this, target, kc, from, m] {
-        reply(from, {{"ev", "held"}, {"keys", m.value("keys").toString()}, {"badges", int(badges_.size())}, {"menuBar", menuBar()->isVisible()}});
-        QTest::keyRelease(target, kc.key(), kc.keyboardModifiers());
-      });
-      return;
-    }
-    QTest::keySequence(windowHandle(), QKeySequence(m.value("keys").toString()));
-    reply(from, {{"ev", "keyed"}, {"keys", m.value("keys").toString()}, {"focus", QApplication::focusWidget() ? QString(QApplication::focusWidget()->metaObject()->className()) : QString()}});
+    // pressing a key runs the event loop: from the main loop then, never inside this socket's read
+    QPointer<QLocalSocket> asker = from;
+    QTimer::singleShot(0, this, [this, asker, m] { pressKeys(m, asker); });
     return;
   }
   if (op == "list") {
@@ -908,7 +902,7 @@ void Host::handle(const QJsonObject& m, QLocalSocket* from) {
     if (toolbar_) for (QAction* a : toolbar_->actions()) if (!a->data().toString().isEmpty()) tools.append(QJsonObject{{"id", a->data().toString()}, {"enabled", a->isEnabled()}});
     for (QAction* a : actions_) acts.append(a->data().toString());
     const Tab* cur = currentTab();
-    reply(from, {{"ev", "list"}, {"terminals", terms}, {"tabs", tabNames}, {"current", cur ? cur->name : QString()}, {"nodes", nodes}, {"toolbar", tools},
+    reply(from, {{"ev", "list"}, {"terminals", terms}, {"tabs", tabNames}, {"current", cur ? cur->name : QString()}, {"nodes", nodes}, {"toolbar", tools}, {"overview", overview_ != nullptr},
                  {"asks", asks}, {"actions", acts}, {"selected", currentNode()}, {"sidebar", dock_->isVisible()}, {"driver", driver_ != nullptr},
                  {"shown", isVisible() && !(windowState() & Qt::WindowMinimized)}, {"fullScreen", isFullScreen()}, {"keyBar", keyBar_ && keyBar_->isVisible()}, {"menuBar", menuBar()->isVisible()}, {"badges", int(badges_.size())}, {"keyBarText", keyBar_ ? keyBar_->text() : QString()}, {"activeWindow", isActiveWindow()}});
     return;
@@ -2060,6 +2054,23 @@ void Host::setTree(const QJsonArray& nodes) {
   updateToolbar();
 }
 
+// A test's key press (the `key` request); `asker` may be gone by the time there is an answer.
+void Host::pressKeys(const QJsonObject& m, QPointer<QLocalSocket> asker) {
+  activateWindow();
+  if (m.contains("hold")) { // held down that long, then let go (the reply comes after)
+    const QKeyCombination kc = QKeySequence(m.value("keys").toString())[0];
+    QPointer<QWidget> target = QApplication::focusWidget() ? QApplication::focusWidget() : static_cast<QWidget*>(this);
+    QTest::keyPress(target, kc.key(), kc.keyboardModifiers());
+    QTimer::singleShot(m.value("hold").toInt(), this, [this, target, kc, asker, m] {
+      if (asker) reply(asker, {{"ev", "held"}, {"keys", m.value("keys").toString()}, {"badges", int(badges_.size())}, {"menuBar", menuBar()->isVisible()}});
+      if (target) QTest::keyRelease(target, kc.key(), kc.keyboardModifiers());
+    });
+    return;
+  }
+  QTest::keySequence(windowHandle(), QKeySequence(m.value("keys").toString()));
+  if (asker) reply(asker, {{"ev", "keyed"}, {"keys", m.value("keys").toString()}, {"focus", QApplication::focusWidget() ? QString(QApplication::focusWidget()->metaObject()->className()) : QString()}});
+}
+
 // A toolbar icon: host/icons/tb-<name>.svg when there is one, else the desktop theme's, else Qt's.
 QIcon Host::toolIcon(const QString& name) const {
   if (QFile::exists(":/tb-" + name + ".svg")) return QIcon(":/tb-" + name + ".svg");
@@ -2106,13 +2117,25 @@ QString Host::termOfNode(const QString& node) const {
 }
 
 void Host::showPreview(QTreeWidgetItem* it) {
-  const QString id = it ? termOfNode(it->data(0, Qt::UserRole).toString()) : QString();
   const bool editing = qobject_cast<QLineEdit*>(QApplication::focusWidget()) && tree_->isAncestorOf(QApplication::focusWidget()); // F2 at work
+  const QString id = it ? termOfNode(it->data(0, Qt::UserRole).toString()) : QString();
   if (id.isEmpty() || editing) { hidePreview(); return; }
   if (!preview_) {
-    preview_ = new QLabel(this, Qt::ToolTip | Qt::FramelessWindowHint);
-    preview_->setStyleSheet("QLabel { background: #0d0f12; border: 1px solid #4a5160; padding: 2px; }");
+    preview_ = new QFrame(this, Qt::ToolTip | Qt::FramelessWindowHint);
+    preview_->setObjectName("preview");
+    preview_->setStyleSheet("#preview { background: #0d0f12; border: 1px solid #4a5160; } QLabel { color: #c9ced8; background: transparent; }");
+    auto* v = new QVBoxLayout(preview_);
+    v->setContentsMargins(6, 4, 6, 6);
+    v->setSpacing(4);
+    previewHead_ = new QLabel(preview_);
+    previewHead_->setTextFormat(Qt::RichText);
+    previewPic_ = new QLabel(preview_);
+    v->addWidget(previewHead_);
+    v->addWidget(previewPic_);
   }
+  // the entry's details as the preview's header (in place of its tooltip)
+  QStringList lines = it->toolTip(0).toHtmlEscaped().split('\n');
+  previewHead_->setText("<b>" + it->text(0).toHtmlEscaped() + "</b>" + (lines.join("").isEmpty() ? QString() : "<br><span style='color:#8d93a3'>" + lines.join("<br>") + "</span>"));
   previewId_ = id;
   refreshPreview();
   const QRect r = tree_->visualItemRect(it);
@@ -2126,9 +2149,85 @@ void Host::refreshPreview() {
   if (!preview_ || !terms_.contains(previewId_)) { hidePreview(); return; }
   QWidget* w = terms_[previewId_].widget;
   const QPixmap pm = w->size().width() > 40 ? w->grab() : QPixmap();
-  if (pm.isNull()) { preview_->setText("  not drawn yet  "); preview_->adjustSize(); return; }
-  preview_->setPixmap(pm.scaledToWidth(qMin(560, pm.width()), Qt::SmoothTransformation));
+  if (pm.isNull()) previewPic_->setText("not drawn yet");
+  else {
+    const qreal dpr = previewPic_->devicePixelRatioF();
+    QPixmap fit = pm.scaledToWidth(int(qMin(560.0, pm.width() / pm.devicePixelRatioF()) * dpr), Qt::SmoothTransformation);
+    fit.setDevicePixelRatio(dpr);
+    previewPic_->setPixmap(fit);
+  }
   preview_->adjustSize();
+}
+
+// Every open terminal at once, live, in a grid over the window; a click goes to one.
+void Host::showOverview() {
+  if (overview_) { closeOverview(); return; } // the key toggles it
+  hidePreview();
+  QStringList ids;
+  for (int i = 0; i < tabs_->count(); ++i)
+    if (const Tab* t = tabOf(tabName(i))) for (const QString& id : t->order) if (terms_.contains(id)) ids << id;
+  if (ids.isEmpty()) { statusBar()->showMessage("no terminals open", 3000); return; }
+  overview_ = new QWidget(this);
+  overview_->setObjectName("overview");
+  overview_->setAttribute(Qt::WA_StyledBackground);
+  overview_->setStyleSheet("#overview { background: rgba(8, 10, 13, 240); } QFrame#ovtile { background: #12151a; border: 1px solid #333944; border-radius: 6px; }"
+                           " QFrame#ovtile:hover { border: 1px solid #6aa9ff; } QLabel { background: transparent; color: #e6e9ef; }");
+  overview_->setGeometry(rect());
+  auto* grid = new QGridLayout(overview_);
+  grid->setContentsMargins(24, 24, 24, 24);
+  grid->setSpacing(14);
+  const int cols = qCeil(qSqrt(double(ids.size())));
+  for (int i = 0; i < ids.size(); ++i) {
+    const Term& t = terms_[ids[i]];
+    auto* tile = new QFrame(overview_);
+    tile->setObjectName("ovtile");
+    tile->setCursor(Qt::PointingHandCursor);
+    tile->setProperty("term", ids[i]);
+    tile->installEventFilter(this);
+    auto* v = new QVBoxLayout(tile);
+    v->setContentsMargins(8, 5, 8, 8);
+    v->setSpacing(4);
+    auto* head = new QLabel(QString("<b style='color:%1'>%2</b>  <span style='color:#8d93a3'>%3</span>")
+                              .arg(t.color.isEmpty() ? QString("#e6e9ef") : t.color, t.tab.toHtmlEscaped(), t.title.toHtmlEscaped()), tile);
+    head->setAttribute(Qt::WA_TransparentForMouseEvents);
+    auto* pic = new QLabel(tile);
+    pic->setAlignment(Qt::AlignCenter);
+    pic->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
+    pic->setAttribute(Qt::WA_TransparentForMouseEvents);
+    v->addWidget(head);
+    v->addWidget(pic, 1);
+    grid->addWidget(tile, i / cols, i % cols);
+    overviewPics_.insert(ids[i], pic);
+  }
+  overview_->show();
+  overview_->raise();
+  overview_->setFocus();
+  if (!overviewTimer_) { overviewTimer_ = new QTimer(this); connect(overviewTimer_, &QTimer::timeout, this, &Host::refreshOverview); }
+  QTimer::singleShot(0, this, &Host::refreshOverview); // once the tiles have their sizes
+  overviewTimer_->start(500);
+}
+
+void Host::refreshOverview() {
+  if (!overview_) return;
+  for (auto it = overviewPics_.begin(); it != overviewPics_.end(); ++it) {
+    if (!terms_.contains(it.key())) continue;
+    QWidget* w = terms_[it.key()].widget;
+    const QPixmap pm = w->size().width() > 40 ? w->grab() : QPixmap();
+    if (pm.isNull()) it.value()->setText("not drawn yet");
+    else { // to the tile's size in device pixels, or a high-DPI screen shows it small
+      const qreal dpr = it.value()->devicePixelRatioF();
+      QPixmap fit = pm.scaled(it.value()->size() * dpr, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+      fit.setDevicePixelRatio(dpr);
+      it.value()->setPixmap(fit);
+    }
+  }
+}
+
+void Host::closeOverview() {
+  if (overviewTimer_) overviewTimer_->stop();
+  if (overview_) overview_->deleteLater();
+  overview_ = nullptr;
+  overviewPics_.clear();
 }
 
 void Host::hidePreview() {
@@ -2205,6 +2304,17 @@ void Host::sidebarFocus() {
 // Keys in the sidebar: Esc goes back to the pane, Enter activates, and a single letter
 // runs the selected entry's action with that key (the old menu's a, x, u, d...).
 bool Host::eventFilter(QObject* o, QEvent* e) {
+  // an entry with a live preview needs no tooltip as well: its details head the preview
+  if (tree_ && o == tree_->viewport() && e->type() == QEvent::ToolTip)
+    if (QTreeWidgetItem* it = tree_->itemAt(static_cast<QHelpEvent*>(e)->pos()); it && !termOfNode(it->data(0, Qt::UserRole).toString()).isEmpty()) return true;
+  // the overview: a click on a tile goes there, Esc closes it
+  if (overview_ && e->type() == QEvent::MouseButtonRelease && o->property("term").isValid()) {
+    const QString id = o->property("term").toString();
+    closeOverview();
+    if (terms_.contains(id)) reveal(id);
+    return true;
+  }
+  if (overview_ && e->type() == QEvent::KeyPress && static_cast<QKeyEvent*>(e)->key() == Qt::Key_Escape) { closeOverview(); return true; }
   if (tree_ && o == tree_->viewport() && (e->type() == QEvent::Leave || (e->type() == QEvent::MouseMove && !tree_->itemAt(static_cast<QMouseEvent*>(e)->position().toPoint()))))
     hidePreview();
   if (e->type() == QEvent::MouseMove && !menuPersist_ && menuBar()->isVisible()) {
@@ -2359,6 +2469,7 @@ void Host::local(const QString& a) {
   else if (a == "host.font-smaller") { fontSize_ = qMax(6, fontSize_ - 1); applyFont(); }
   else if (a == "host.font-reset") { fontSize_ = baseFontSize_; applyFont(); }
   else if (a == "host.toolbar") showToolbar(!toolbar_->isVisible());
+  else if (a == "host.overview") showOverview();
   else if (a == "host.fullscreen") { if (!dropdown_) setWindowState(windowState() ^ Qt::WindowFullScreen); } // dropdown mode is always full screen
   else if (a == "host.settings") openSettings();
   else if (a == "host.driver-restart") {
@@ -2585,6 +2696,7 @@ void Host::placeKeyBar() {
 void Host::resizeEvent(QResizeEvent* e) {
   QMainWindow::resizeEvent(e);
   if (keyBar_ && keyBar_->isVisible()) placeKeyBar();
+  if (overview_) overview_->setGeometry(rect());
 }
 
 // Every key where it acts, as small tags: on the tab bar, on each pane on screen (how to

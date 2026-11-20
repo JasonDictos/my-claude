@@ -338,6 +338,12 @@ await u.shows("the menu bar back for good", (x) => x.menuBar === true, 3000);
   u.send({ op: "sidebar" }); // and back to the pane
 }
 
+// --- the overview: every terminal at once (its key), gone again with Esc
+await key("Meta+Shift+W");
+await u.shows("the overview open", (x) => x.overview === true);
+await key("Escape");
+await u.shows("the overview closed", (x) => x.overview === false);
+
 // --- renaming in the list (what F2 sends): a display name; emptied, the default again
 u.send({ op: "emit", event: { ev: "rename", node: "p:demo", name: "Demo One" } });
 await u.shows("the project renamed", (x) => x.nodes.some((n: any) => n.id === "p:demo" && n.label === "Demo One"));
