@@ -8,7 +8,7 @@ import { basename, join } from "node:path";
 import { containerOf, killOccupant, lockInfo, occupantPid, occupantsIndex, peerState, peerStateOf, projectState, type PeerState, type ProjectState } from "./live.ts";
 import { profile } from "./profiles/index.ts";
 import { homedir } from "node:os";
-import { pause, sh, shOk, shq, sleep, loginShell } from "./sh.ts";
+import { adoptShellEnv, pause, sh, shOk, shq, sleep, loginShell } from "./sh.ts";
 import * as peers from "./peers.ts";
 import {
   CONFIG_DIR, NAME_RE, PROJECTS, ROOT, config, daemonSettings, defaultProfile, die, exists, latestSession, listProjects, load, peerOf, remove, restore, save, slug, transcriptDir, transcriptPath, trustPath,
@@ -1034,6 +1034,8 @@ export async function keepalive(once = false): Promise<number> {
 // Runs inside the pane. When claude exits (a double Ctrl-C, a crash, /exit) the
 // pane stays: Enter relaunches on the same conversation, q closes it.
 export function launch(name: string, repo: string): number {
+  // the tmux server may be the daemon's (a service): the profile gets what your shell exports (GH_TOKEN…)
+  adoptShellEnv(config().shell?.login !== false);
   for (;;) {
     const rc = launchOnce(name, repo);
     for (;;) {

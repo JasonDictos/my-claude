@@ -15,7 +15,7 @@ import { REMOTE_PATH } from "./remote.ts";
 import { lockInfo, occupantPid } from "./live.ts";
 import type { ProfileAction } from "./profiles/types.ts";
 import { PROJECTS, ROOT, UsageError, config, daemonSettings, defaultProfile, saveConfig, slug, type Trashed } from "./store.ts";
-import { out, sh, shOk } from "./sh.ts";
+import { adoptShellEnv, out, sh, shOk } from "./sh.ts";
 
 type Dict = Record<string, any>;
 type Repo = { name: string; description: string };
@@ -246,29 +246,6 @@ or the terminal UI here: my-claude`);
 
 // ---- the driver ------------------------------------------------------------------------
 
-// Started from the desktop, the driver lacks what a login shell exports (tokens, PATH), and so
-// would every pane: take it once, keeping what names this run (socket, roots, display).
-function adoptShellEnv(): void {
-  if (process.env.MY_CLAUDE_NO_SHELL_ENV) return;
-  const keep = /^(MC_TERM_|MY_CLAUDE_|TMUX|XDG_|DISPLAY$|WAYLAND_DISPLAY$|DBUS_|QT_|HOME$|USER$|LOGNAME$|SHLVL$|PWD$|OLDPWD$|_$)/;
-  try {
-    const r = Bun.spawnSync([process.env.SHELL || "bash", config().shell?.login !== false ? "-lic" : "-ic", 'printf "\\0MCENV\\0"; env -0'], { stdin: "ignore", stdout: "pipe", stderr: "ignore", timeout: 8000 });
-    const all = r.stdout.toString("utf8");
-    const at = all.indexOf("\0MCENV\0");
-    if (at < 0) return;
-    let n = 0;
-    for (const kv of all.slice(at + 7).split("\0")) {
-      const i = kv.indexOf("=");
-      if (i <= 0) continue;
-      const k = kv.slice(0, i);
-      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(k) || keep.test(k)) continue;
-      if (process.env[k] !== kv.slice(i + 1)) { process.env[k] = kv.slice(i + 1); n++; }
-    }
-    log(`took ${n} variables from the interactive shell environment`);
-  } catch (e) {
-    log(`shell environment not read: ${errText(e)}`);
-  }
-}
 
 interface TermSpec { id: string; tab: string; title: string; color: string; attention: string; node: string; scheme?: string; textStep?: number; skey?: string }
 interface Target { name: string | null; repo: string | null; pane: string | null }
@@ -1405,7 +1382,7 @@ class Driver {
 }
 
 export async function drive(): Promise<number> {
-  adoptShellEnv();
+  adoptShellEnv(config().shell?.login !== false, log);
   // --stdio: the window is on the other end of stdin/stdout; nothing else may write there
   const stdio = process.argv.includes("--stdio");
   if (stdio) {

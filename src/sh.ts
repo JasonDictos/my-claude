@@ -67,3 +67,27 @@ export function sleep(ms: number): void {
 export const loginShell = (login: boolean): { shell: string; args: string[]; flags: string } => ({
   shell: process.env.SHELL || "bash", args: login ? ["-l"] : [], flags: login ? "-lic" : "-ic",
 });
+
+// Started by a service (the daemon's tmux server) or from the desktop, a process lacks what an
+// interactive login shell exports (tokens, PATH): take it, keeping what names this run.
+export function adoptShellEnv(login = true, log: (m: string) => void = () => {}): void {
+  if (process.env.MY_CLAUDE_NO_SHELL_ENV) return;
+  const keep = /^(MC_TERM_|MY_CLAUDE_|TMUX|XDG_|DISPLAY$|WAYLAND_DISPLAY$|DBUS_|QT_|HOME$|USER$|LOGNAME$|SHLVL$|PWD$|OLDPWD$|_$)/;
+  try {
+    const r = Bun.spawnSync([process.env.SHELL || "bash", login ? "-lic" : "-ic", 'printf "\\0MCENV\\0"; env -0'], { stdin: "ignore", stdout: "pipe", stderr: "ignore", timeout: 10_000 });
+    const all = r.stdout.toString("utf8");
+    const at = all.indexOf("\0MCENV\0");
+    if (at < 0) return;
+    let n = 0;
+    for (const kv of all.slice(at + 7).split("\0")) {
+      const i = kv.indexOf("=");
+      if (i <= 0) continue;
+      const k = kv.slice(0, i);
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(k) || keep.test(k)) continue;
+      if (process.env[k] !== kv.slice(i + 1)) { process.env[k] = kv.slice(i + 1); n++; }
+    }
+    log(`took ${n} variables from the interactive shell environment`);
+  } catch (e) {
+    log(`shell environment not read: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
