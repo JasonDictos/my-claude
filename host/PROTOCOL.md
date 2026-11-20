@@ -90,6 +90,7 @@ Two kinds, by what `open` carries:
 | `globalKey` | `keys` | The desktop-wide show/hide key (KDE), taken over live. Only a window for this machine holds it. |
 | `connect` | `machine`, `driver[]`, `tmux[]` | Another machine's projects in this window: its driver started from `driver` (argv, stdio), its tmux reached through `tmux`. |
 | `disconnect` | `machine` | Take them out again; they keep running there. |
+| `fill` | `id`, `key`, `enum`, `enumLabels`, `note` | New choices for a picker of an open dialog (they were still loading): ticks stay, the search still applies; `note` shows under the list ("loading…"). |
 | `answer` | `id`, `values` or `cancelled` | Answer an open dialog without clicking (tests). |
 
 `look`: `seedLines` (default 50000) is how much of tmux's own scrollback a pane starts

@@ -8,7 +8,7 @@ import { basename, join } from "node:path";
 import { containerOf, killOccupant, lockInfo, occupantPid, occupantsIndex, peerState, peerStateOf, projectState, type PeerState, type ProjectState } from "./live.ts";
 import { profile } from "./profiles/index.ts";
 import { homedir } from "node:os";
-import { pause, sh, shq, sleep, loginShell } from "./sh.ts";
+import { pause, sh, shOk, shq, sleep, loginShell } from "./sh.ts";
 import * as peers from "./peers.ts";
 import {
   CONFIG_DIR, NAME_RE, PROJECTS, ROOT, config, daemonSettings, defaultProfile, die, exists, latestSession, listProjects, load, peerOf, remove, restore, save, slug, transcriptDir, transcriptPath, trustPath,
@@ -475,7 +475,9 @@ export async function deleteProject(name: string, force = false): Promise<string
 async function clone(origin: string, path: string, branch?: string): Promise<string | null> {
   const run = async (argv: string[]): Promise<string | null> => {
     try {
-      const proc = Bun.spawn(argv, { stdin: "ignore", stdout: "ignore", stderr: "pipe", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
+      const key = String(config().clone?.sshKey ?? "").replace(/^~/, homedir());
+      const env = { ...process.env, GIT_TERMINAL_PROMPT: "0", ...(key ? { GIT_SSH_COMMAND: `ssh -i ${shq(key)} -o IdentitiesOnly=yes` } : {}) };
+      const proc = Bun.spawn(argv, { stdin: "ignore", stdout: "ignore", stderr: "pipe", env });
       const [err, code] = await Promise.all([new Response(proc.stderr).text(), proc.exited]);
       return code === 0 ? null : err.trim().split("\n").pop() || `${argv[0]} exited ${code}`;
     } catch (e) {
@@ -485,7 +487,7 @@ async function clone(origin: string, path: string, branch?: string): Promise<str
   const git = (url: string) => run(["git", "clone", ...(branch ? ["--branch", branch] : []), url, path]);
   if (!/^[\w.-]+\/[\w.-]+$/.test(origin)) return git(origin);
   const tries: (() => Promise<string | null>)[] = [];
-  if (Bun.which("gh") && Bun.spawnSync(["gh", "auth", "status"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0) {
+  if (Bun.which("gh") && (await shOk("gh", ["auth", "status"]))) {
     tries.push(() => run(["gh", "repo", "clone", origin, path, ...(branch ? ["--", "--branch", branch] : [])]));
   }
   tries.push(() => git(`https://github.com/${origin}.git`), () => git(`git@github.com:${origin}.git`));

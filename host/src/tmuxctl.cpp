@@ -3,6 +3,7 @@
 #include "tmuxctl.h"
 #include <QProcess>
 #include <QSocketNotifier>
+#include <QTimer>
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
@@ -44,8 +45,12 @@ TmuxControl::~TmuxControl() {
   toTmux_ = nullptr;
   if (in_ >= 0) ::close(in_); // EOF on a control client's stdin detaches it
   if (proc_->state() != QProcess::NotRunning) {
-    proc_->disconnect(this);
-    if (!proc_->waitForFinished(300)) proc_->kill();
+    // it outlives us until it has exited (stdin closed: it detaches); the GUI thread never waits
+    QProcess* p = proc_;
+    p->disconnect(this);
+    p->setParent(nullptr);
+    QObject::connect(p, &QProcess::finished, p, &QObject::deleteLater);
+    QTimer::singleShot(300, p, [p] { if (p->state() != QProcess::NotRunning) p->kill(); });
   }
   if (out_ >= 0) ::close(out_);
 }

@@ -41,6 +41,7 @@
 #include <QTabBar>
 #include <QTabWidget>
 #include <QTest>
+#include <QThread>
 #include <QTimer>
 #include <QStyle>
 #include <QToolButton>
@@ -59,6 +60,15 @@
 #endif
 
 namespace {
+// A child ended without the GUI thread waiting: terminate, kill if it is still there after
+// the grace period, deleted once it has exited.
+void endProcess(QProcess* p, int graceMs) {
+  if (p->state() == QProcess::NotRunning) { p->deleteLater(); return; }
+  QObject::connect(p, &QProcess::finished, p, &QObject::deleteLater);
+  p->terminate();
+  QTimer::singleShot(graceMs, p, [p] { if (p->state() != QProcess::NotRunning) p->kill(); });
+}
+
 const char* kPlaceholder = "No project open.\n\nPick one in the Projects list (Enter or double-click starts it),\nor use my-claude → New project.";
 
 // The state mark in front of a sidebar entry: a filled dot, a half, a ring or a bang.
@@ -391,10 +401,13 @@ void Host::startDriver() {
   QProcess* d = driver_;
   connect(d, &QProcess::readyReadStandardOutput, bridge, [d, bridge] { bridge->write(d->readAllStandardOutput()); });
   connect(bridge, &QLocalSocket::readyRead, d, [d, bridge] { d->write(bridge->readAll()); });
-  // connected before the driver starts: its first words must not be lost
+  // the driver starts once the bridge is connected (its first words must not be lost),
+  // without the GUI thread waiting for it
+  const QStringList argv = driverArgv_;
+  const auto go = [d, argv] { if (d->state() == QProcess::NotRunning) d->start(argv.first(), argv.mid(1)); };
+  connect(bridge, &QLocalSocket::connected, d, go);
   bridge->connectToServer(socketPath_);
-  bridge->waitForConnected(2000);
-  driver_->start(driverArgv_.first(), driverArgv_.mid(1));
+  if (bridge->state() == QLocalSocket::ConnectedState) go();
 }
 
 void Host::setRemote(const QString& name, const QStringList& driverArgv, const QStringList& tmux) {
@@ -462,7 +475,7 @@ void Host::onReadyRead(QLocalSocket* s) {
       if (op == "notify") { QJsonObject n = msg; n["text"] = tag + ": " + msg.value("text").toString(); handle(n, s); continue; }
       if (windowOwn.contains(op)) continue;
       msg = tagIn(msg, tag);
-      if (op == "ask") msg["id"] = msg.value("id").toString() + "#" + tag;
+      if (op == "ask" || op == "fill") msg["id"] = msg.value("id").toString() + "#" + tag;
     }
     handle(msg, s);
     if (!clients_.contains(s)) return; // a request may end the connection
@@ -643,6 +656,10 @@ void Host::handle(const QJsonObject& m, QLocalSocket* from) {
   if (op == "sidebar") { if (m.contains("select")) selectNode(m.value("select").toString()); else sidebarFocus(); return; }
   if (op == "menu") { setMenus(m.value("menus").toArray()); return; }
   if (op == "ask") { ask(m); return; }
+  if (op == "fill") { // choices that were still loading when the dialog opened
+    if (FormDialog* d = asks_.value(id)) d->setChoices(m.value("key").toString(), m.value("enum").toArray(), m.value("enumLabels").toArray(), m.value("note").toString());
+    return;
+  }
   if (op == "answer") {
     // Tests answer a dialog without clicking through it.
     FormDialog* d = asks_.value(id);
@@ -2172,32 +2189,38 @@ void Host::registerGlobalKey() {
   // The key is this machine's window's. Every window would get each press and flip itself,
   // so with a second (--remote) window open one would hide as the other showed.
   if (!remote_.isEmpty()) return;
-  QDBusConnection bus = QDBusConnection::sessionBus();
-  if (!bus.isConnected()) return;
-  QDBusInterface accel("org.kde.kglobalaccel", "/kglobalaccel", "org.kde.KGlobalAccel", bus);
-  if (!accel.isValid()) return;
-  qDBusRegisterMetaType<KeyList>();
-  qDBusRegisterMetaType<KeyLists>();
   const QKeySequence seq(toggleKey_.isEmpty() ? qEnvironmentVariable("MC_TERM_TOGGLE_KEY", "Ctrl+Alt+T") : toggleKey_);
   if (seq.isEmpty()) return;
   const int key = seq[0].toCombined();
-  const QStringList id = {"mc-term", "toggle", "my-claude", "Show or hide my-claude"};
-  // a launcher entry holding the key while this window runs would take it first
-  // (flags: SetPresent 2 makes the action live, NoAutoloading 4 takes our keys over saved ones)
-  accel.call("setShortcut", QStringList{"mc-term-toggle.desktop", "_launch", "my-claude (show/hide)", "Launch"}, QVariant::fromValue(KeyList{}), 4u);
-  // whoever else holds the key (a drop-down terminal, say) lets go of it: KDE gives a key
-  // to its first claimant only
-  for (int i = 0; i < 2; ++i) {
-    const QDBusMessage owner = accel.call("action", key);
-    const QStringList who = owner.arguments().value(0).toStringList();
-    if (who.size() < 2 || who[0] == "mc-term") break;
-    accel.call("setForeignShortcut", who, QVariant::fromValue(KeyList{}));
-    accel.call("setShortcut", who, QVariant::fromValue(KeyList{}), 4u);
-  }
-  accel.call("doRegister", id);
-  const QDBusMessage r = accel.call("setShortcut", id, QVariant::fromValue(KeyList{key}), 6u);
-  if (r.type() == QDBusMessage::ErrorMessage) qWarning("mc-term: global key not registered: %s", qPrintable(r.errorMessage()));
-  bus.connect("org.kde.kglobalaccel", "/component/mc_term", "org.kde.kglobalaccel.Component", "globalShortcutPressed", this, SLOT(onGlobalShortcut(QString,QString,qlonglong)));
+  qDBusRegisterMetaType<KeyList>();
+  qDBusRegisterMetaType<KeyLists>();
+  // round trips to KDE's shortcut service: on a thread of their own, never the GUI's
+  QThread* worker = QThread::create([this, key] {
+    QDBusConnection bus = QDBusConnection::sessionBus();
+    if (!bus.isConnected()) return;
+    QDBusInterface accel("org.kde.kglobalaccel", "/kglobalaccel", "org.kde.KGlobalAccel", bus);
+    if (!accel.isValid()) return;
+    const QStringList id = {"mc-term", "toggle", "my-claude", "Show or hide my-claude"};
+    // a launcher entry holding the key while this window runs would take it first
+    // (flags: SetPresent 2 makes the action live, NoAutoloading 4 takes our keys over saved ones)
+    accel.call("setShortcut", QStringList{"mc-term-toggle.desktop", "_launch", "my-claude (show/hide)", "Launch"}, QVariant::fromValue(KeyList{}), 4u);
+    // whoever else holds the key (a drop-down terminal, say) lets go of it: KDE gives a key
+    // to its first claimant only
+    for (int i = 0; i < 2; ++i) {
+      const QDBusMessage owner = accel.call("action", key);
+      const QStringList who = owner.arguments().value(0).toStringList();
+      if (who.size() < 2 || who[0] == "mc-term") break;
+      accel.call("setForeignShortcut", who, QVariant::fromValue(KeyList{}));
+      accel.call("setShortcut", who, QVariant::fromValue(KeyList{}), 4u);
+    }
+    accel.call("doRegister", id);
+    const QDBusMessage r = accel.call("setShortcut", id, QVariant::fromValue(KeyList{key}), 6u);
+    if (r.type() == QDBusMessage::ErrorMessage) qWarning("mc-term: global key not registered: %s", qPrintable(r.errorMessage()));
+    // the press arrives on the GUI thread (QtDBus delivers to the receiver's thread)
+    bus.connect("org.kde.kglobalaccel", "/component/mc_term", "org.kde.kglobalaccel.Component", "globalShortcutPressed", this, SLOT(onGlobalShortcut(QString,QString,qlonglong)));
+  });
+  connect(worker, &QThread::finished, worker, &QObject::deleteLater);
+  worker->start();
 }
 
 void Host::onGlobalShortcut(const QString& component, const QString& shortcut, qlonglong) {
@@ -2488,9 +2511,6 @@ void Host::startMachine(const QString& tag) {
   QDir().mkpath(dir);
   p->setStandardErrorFile(dir + "/gui-driver-" + tag + ".log", QIODevice::Append);
   auto* bridge = new QLocalSocket(p);
-  bridge->connectToServer(socketPath_);
-  bridge->waitForConnected(2000);
-  bridge->write(QJsonDocument(QJsonObject{{"op", "iam"}, {"machine", tag}}).toJson(QJsonDocument::Compact) + "\n");
   connect(p, &QProcess::readyReadStandardOutput, bridge, [p, bridge] { bridge->write(p->readAllStandardOutput()); });
   connect(bridge, &QLocalSocket::readyRead, p, [p, bridge] { p->write(bridge->readAll()); });
   connect(p, &QProcess::finished, this, [this, tag, p](int code, QProcess::ExitStatus) {
@@ -2506,7 +2526,16 @@ void Host::startMachine(const QString& tag) {
     if (m->wanted) QTimer::singleShot(qMin(60000, 3000 * (1 << qMin(m->restarts++, 4))), this, [this, tag] { startMachine(tag); });
   });
   rebuildTree();
-  p->start(it->driverArgv.value(0), it->driverArgv.mid(1));
+  // started once the bridge is connected and has said whose it is; the GUI thread never waits
+  const QStringList argv = it->driverArgv;
+  const auto go = [p, bridge, tag, argv] {
+    if (p->state() != QProcess::NotRunning) return;
+    bridge->write(QJsonDocument(QJsonObject{{"op", "iam"}, {"machine", tag}}).toJson(QJsonDocument::Compact) + "\n");
+    p->start(argv.value(0), argv.mid(1));
+  };
+  connect(bridge, &QLocalSocket::connected, p, go);
+  bridge->connectToServer(socketPath_);
+  if (bridge->state() == QLocalSocket::ConnectedState) go();
 }
 
 void Host::stopMachine(const QString& tag) {
@@ -2518,6 +2547,6 @@ void Host::stopMachine(const QString& tag) {
   for (const Term& t : terms_) if (tagOf(t.id) == tag) ids << t.id;
   for (const QString& id : ids) closeTerm(id, false);
   machines_.erase(it);
-  if (p) { p->disconnect(this); p->terminate(); if (!p->waitForFinished(1500)) p->kill(); p->deleteLater(); }
+  if (p) { p->disconnect(this); endProcess(p, 1500); }
   rebuildTree();
 }

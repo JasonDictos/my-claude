@@ -15,9 +15,10 @@ import { REMOTE_PATH } from "./remote.ts";
 import { lockInfo, occupantPid } from "./live.ts";
 import type { ProfileAction } from "./profiles/types.ts";
 import { PROJECTS, ROOT, UsageError, config, daemonSettings, defaultProfile, saveConfig, slug } from "./store.ts";
-import { out, sh } from "./sh.ts";
+import { out, sh, shOk } from "./sh.ts";
 
 type Dict = Record<string, any>;
+type Repo = { name: string; description: string };
 const POLL_MS = 1500;
 const MODELS = ["default", "fable-5.1", "opus-5.5", "sonnet-5.5"];
 const BUILD_HELP = `my-claude gui: the window is a small Qt program in ${ROOT}/host. It needs cmake, ninja, a C++ compiler,
@@ -303,7 +304,10 @@ class Driver {
 
   async run(): Promise<number> {
     this.link = await hostLink(this.sock, (ev) => this.onEvent(ev));
+    // behind everything else: who gh and ssh are signed in as, and the organisation's repos
     void this.ghWhoami().catch(() => {});
+    void this.sshWhoami().catch(() => {});
+    { const org = String(config().clone?.defaultOrg ?? ""); if (org) void this.orgRepos(org).catch(() => {}); }
     // terminals already shown: our predecessor died; take them as they are, then say who we
     // are (which hands us what the user did meanwhile)
     const have = await this.list();
@@ -342,8 +346,7 @@ class Driver {
   private list(): Promise<Dict> {
     return new Promise((resolve) => { this.lists.push(resolve); this.send({ op: "list" }); });
   }
-  private ask(spec: Dict): Promise<Dict | null> {
-    const id = `ask-${++this.askSeq}`;
+  private ask(spec: Dict, id = `ask-${++this.askSeq}`): Promise<Dict | null> {
     return new Promise((resolve) => { this.asks.set(id, resolve); this.send({ op: "ask", id, ...spec }); });
   }
   private async confirm(title: string, text: string, ok: string): Promise<boolean> {
@@ -670,7 +673,7 @@ class Driver {
     const schemesDir = "/usr/share/qtermwidget6/color-schemes";
     const schemes = existsSync(schemesDir) ? readdirSync(schemesDir).filter((f) => f.endsWith(".colorscheme")).map((f) => f.replace(/\.colorscheme$/, "")).sort() : [];
     const sections: Dict = {
-      general: { type: "object", title: "my-claude", order: ["profile", "defaultOrg", "githubToken", "chatName", "peersCli", "historyLimit", "panesPerWindow", "panel"], properties: {
+      general: { type: "object", title: "my-claude", order: ["profile", "defaultOrg", "githubToken", "sshKey", "chatName", "peersCli", "historyLimit", "panesPerWindow", "panel"], properties: {
         historyLimit: { type: "integer", title: "Lines tmux keeps per pane", minimum: 0, maximum: 2000000, default: 50000, description: "tmux holds these in memory (about 800 bytes a line), so it is bounded. The window keeps its own scrollback, unlimited and on disk. 0: leave tmux's own setting. Applies to panes started from now on." },
         profile: { type: "string", title: "Default profile", enum: Object.keys(profiles), description: "How a new project's Claude sessions are started" },
         defaultOrg: { type: "string", title: "Default GitHub organisation", placeholder: "acme", description: "A bare repo name means a repo of this organisation: adding \"billing\" clones acme/billing. Add repos lists its repos to pick from. Other organisations: org/repo." },
@@ -678,6 +681,8 @@ class Driver {
         peersCli: { type: "string", title: "claude-peers CLI", placeholder: "~/claude-peers-mcp/cli.ts" },
         githubToken: { type: "string", format: "password", title: "GitHub token", placeholder: "paste a token to sign in (repo scope)",
           description: `${this.ghWho ? `gh is signed in to GitHub as ${this.ghWho}.` : "gh is not signed in to GitHub, so the repo browser sees public repos only."} A token pasted here goes to gh's credential store, and git uses it over https (gh auth setup-git); settings.json never holds it.` },
+        sshKey: { type: "string", format: "path", title: "SSH key for GitHub", placeholder: "ssh's own (agent, ~/.ssh/config)",
+          description: `${this.sshWho ? `ssh reaches GitHub as ${this.sshWho}.` : "ssh does not reach GitHub with a key yet."} Clones fall back to git@github.com with it when https cannot.` },
         panesPerWindow: { type: "integer", title: "Panes per window (terminal UI)", minimum: 1, maximum: 16, default: 6 },
         panel: { type: "boolean", title: "Side panel (terminal UI)", default: true } } },
       window: { type: "object", title: "Window", order: ["font", "fontSize", "scheme", "tint", "alternate", "transparency", "blur", "panesPerGroup", "scrollback", "copyOnSelect", "panes", "openOnStart", "dropdown", "keepSolo"], properties: {
@@ -697,7 +702,7 @@ class Driver {
         keepSolo: { type: "boolean", title: "Leave projects one pane per tmux window when their tab closes", default: false, description: "Off: a project without a tab goes back to the terminal UI's tiled layout and side panel" } } },
     };
     const values: Dict = {
-      general: { profile: cfg.profile ?? "host", defaultOrg: cfg.clone?.defaultOrg ?? "", chatName: cfg.chat?.name ?? "", peersCli: cfg.peers?.cli ?? "", historyLimit: cfg.historyLimit === undefined ? 50000 : Number(cfg.historyLimit) || 0, panesPerWindow: Number(cfg.panesPerWindow) || 6, panel: cfg.panel !== false },
+      general: { profile: cfg.profile ?? "host", defaultOrg: cfg.clone?.defaultOrg ?? "", sshKey: cfg.clone?.sshKey ?? "", chatName: cfg.chat?.name ?? "", peersCli: cfg.peers?.cli ?? "", historyLimit: cfg.historyLimit === undefined ? 50000 : Number(cfg.historyLimit) || 0, panesPerWindow: Number(cfg.panesPerWindow) || 6, panel: cfg.panel !== false },
       window: { font: cfg.gui?.font ?? "", fontSize: Number(cfg.gui?.fontSize) || 0, scheme: cfg.gui?.scheme ?? "", tint: cfg.gui?.tint === undefined ? 35 : Number(cfg.gui.tint) || 0, alternate: cfg.gui?.alternate !== false, hosts: Object.entries((cfg.gui?.hosts ?? {}) as Record<string, { dest?: string; port?: number }>).map(([n, h]) => `${n} ${h.dest}${h.port ? `:${h.port}` : ""}`).join("\n"), remote: cfg.gui?.remote ?? "", remotePort: Number(cfg.gui?.remotePort) || 0, transparency: Number(cfg.gui?.transparency) || 0, blur: cfg.gui?.blur !== false, panesPerGroup: Number(cfg.gui?.panesPerGroup) || 4, scrollback: Number(cfg.gui?.scrollback) || 0, copyOnSelect: cfg.gui?.copyOnSelect !== false, dropdown: cfg.gui?.dropdown === true, panes: cfg.gui?.panes === "view" ? "view" : "native", openOnStart: cfg.gui?.openOnStart !== false, keepSolo: cfg.gui?.keepSolo === true },
     };
     sections.remote = { type: "object", title: "Remote", description: "Other machines' projects in a window here, over ssh. The other machine needs my-claude and tmux; its daemon's own ssh port (2222) or its sshd will do.", order: ["hosts", "remote", "remotePort"], properties: {
@@ -741,10 +746,14 @@ class Driver {
       const list = String(raw ?? "").split(",").map((x) => x.trim()).filter(Boolean);
       keys[id] = list.join(", ") === (def.get(id) ?? "") ? null : list;
     }
-    if (String(g.githubToken ?? "").trim()) void this.githubLogin(String(g.githubToken).trim());
+    // new sign-in details, or another organisation: checked and the list fetched behind the form
+    const token = String(g.githubToken ?? "").trim(), before = config().clone ?? {};
+    if (token || String(g.sshKey ?? "") !== String(before.sshKey ?? "") || String(g.defaultOrg ?? "") !== String(before.defaultOrg ?? "")) {
+      void this.refreshAuth(token, String(g.defaultOrg ?? "")).catch((e) => this.fail(e, "GitHub"));
+    }
     const patch: Dict = {
       profile: g.profile || null,
-      clone: { defaultOrg: blank(g.defaultOrg) },
+      clone: { defaultOrg: blank(g.defaultOrg), sshKey: blank(g.sshKey) },
       chat: { name: blank(g.chatName) },
       peers: { cli: blank(g.peersCli) },
       historyLimit: Number(g.historyLimit) === 50000 ? null : Math.max(0, Number(g.historyLimit) || 0),
@@ -1161,9 +1170,27 @@ class Driver {
     if (!Bun.which("gh")) return (this.ghWho = "");
     return (this.ghWho = (await sh("gh", ["api", "user", "--jq", ".login"], { ok: true })).trim());
   }
+  private sshWho = "";
+  private async sshWhoami(): Promise<string> {
+    const key = String(config().clone?.sshKey ?? "").replace(/^~/, homedir());
+    const p = Bun.spawn(["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", ...(key ? ["-i", key, "-o", "IdentitiesOnly=yes"] : []), "git@github.com"], { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    const [o, e] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+    return (this.sshWho = /Hi ([^!]+)!/.exec(o + e)?.[1] ?? "");
+  }
+  // Sign-in details changed: gh takes a new token, then both ways in are checked and the
+  // organisation's list fetched again, all behind the form; the status bar has the outcome.
+  private async refreshAuth(token: string, org: string): Promise<void> {
+    if (token) {
+      const bad = await this.githubLogin(token);
+      if (bad) { this.notify(`GitHub token not taken: ${bad}`, { error: true }); return; }
+    }
+    this.repoCache.clear();
+    const [gh, ssh, repos] = await Promise.all([this.ghWhoami(), this.sshWhoami(), org ? this.orgRepos(org, 0).catch(() => null) : Promise.resolve(null)]);
+    this.notify(`GitHub: ${gh ? `gh as ${gh}` : "gh not signed in"} · ${ssh ? `ssh as ${ssh}` : "no ssh key reaches it"}${org ? ` · ${repos ? `${repos.length} ${org} repos` : `${org}'s repos could not be listed`}` : ""}`, { error: !gh && !ssh });
+  }
   // As setup_dev --token does: the token to gh's credential store, and git over https through gh.
-  private async githubLogin(token: string): Promise<void> {
-    if (!Bun.which("gh")) { this.notify("GitHub token: install the GitHub CLI (gh) first", { error: true }); return; }
+  private async githubLogin(token: string): Promise<string | null> {
+    if (!Bun.which("gh")) return "install the GitHub CLI (gh) first";
     const { GH_TOKEN: _a, GITHUB_TOKEN: _b, ...env } = process.env; // gh stores nothing while a token is in its environment
     const run = async (args: string[], input?: string) => {
       const p = Bun.spawn(["gh", ...args], { stdin: input === undefined ? "ignore" : "pipe", stdout: "ignore", stderr: "pipe", env });
@@ -1171,24 +1198,46 @@ class Driver {
       const [err, code] = await Promise.all([new Response(p.stderr).text(), p.exited]);
       return code === 0 ? null : err.trim().split("\n").pop() || `gh ${args[0]} failed`;
     };
-    const bad = (await run(["auth", "login", "--hostname", "github.com", "--with-token"], token + "\n")) ?? (await run(["auth", "setup-git", "--hostname", "github.com"]));
-    if (bad) { this.notify(`GitHub token not taken: ${bad}`, { error: true }); return; }
-    this.repoCache.clear();
-    const who = await this.ghWhoami();
-    this.notify(`gh and git are signed in to GitHub${who ? ` as ${who}` : ""}`);
+    return (await run(["auth", "login", "--hostname", "github.com", "--with-token"], token + "\n")) ?? (await run(["auth", "setup-git", "--hostname", "github.com"]));
   }
-  private async orgRepos(org: string): Promise<{ name: string; description: string }[]> {
+  // An organisation's repos. The last list is kept on disk, so a dialog shows it at once and
+  // swaps in the fresh one when it arrives; one fetch at a time per organisation.
+  private repoFile = (org: string) => join(process.env.XDG_CACHE_HOME ?? join(homedir(), ".cache"), "my-claude", "repos", `${org.replace(/[^A-Za-z0-9_.-]/g, "_")}.json`);
+  private repoLoads = new Map<string, Promise<Repo[]>>();
+  private cachedRepos(org: string): Repo[] | null {
     const hit = this.repoCache.get(org);
-    if (hit && Date.now() - hit.at < 600_000) return hit.repos;
-    let repos: { name: string; description: string; archived?: boolean }[] = [];
-    if (Bun.which("gh") && Bun.spawnSync(["gh", "auth", "status"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0) {
+    if (hit) return hit.repos;
+    try {
+      const d = JSON.parse(readFileSync(this.repoFile(org), "utf8")) as { at: number; repos: Repo[] };
+      this.repoCache.set(org, d);
+      return d.repos;
+    } catch { return null; }
+  }
+  private orgRepos(org: string, maxAgeMs = 600_000): Promise<Repo[]> {
+    const hit = this.repoCache.get(org) ?? (this.cachedRepos(org), this.repoCache.get(org));
+    if (hit && Date.now() - hit.at < maxAgeMs) return Promise.resolve(hit.repos);
+    const running = this.repoLoads.get(org);
+    if (running) return running;
+    const load = this.fetchRepos(org).then((list) => {
+      this.repoCache.set(org, { at: Date.now(), repos: list });
+      try { mkdirSync(dirname(this.repoFile(org)), { recursive: true }); writeFileSync(this.repoFile(org), JSON.stringify({ at: Date.now(), repos: list })); } catch {}
+      return list;
+    }).finally(() => this.repoLoads.delete(org));
+    this.repoLoads.set(org, load);
+    return load;
+  }
+  private async fetchRepos(org: string): Promise<Repo[]> {
+    let repos: (Repo & { archived?: boolean })[] = [];
+    if (Bun.which("gh") && (await shOk("gh", ["auth", "status"]))) {
       const out = await sh("gh", ["repo", "list", org, "--limit", "2000", "--json", "name,description,isArchived"], { ok: true });
       try { repos = (JSON.parse(out || "[]") as any[]).map((r) => ({ name: r.name, description: r.description ?? "", archived: r.isArchived })); } catch { repos = []; }
     }
     if (!repos.length) {
+      const token = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
       for (const kind of ["orgs", "users"]) {
         for (let page = 1; page <= 20; page++) {
-          const r = await fetch(`https://api.github.com/${kind}/${encodeURIComponent(org)}/repos?per_page=100&page=${page}`, { headers: { Accept: "application/vnd.github+json" } }).catch(() => null);
+          const r = await fetch(`https://api.github.com/${kind}/${encodeURIComponent(org)}/repos?per_page=100&page=${page}${kind === "orgs" ? "&type=all" : ""}`,
+            { headers: { Accept: "application/vnd.github+json", ...(token ? { Authorization: `Bearer ${token}` } : {}) } }).catch(() => null);
           if (!r?.ok) break;
           const batch = (await r.json()) as any[];
           repos.push(...batch.map((x) => ({ name: x.name, description: x.description ?? "", archived: x.archived })));
@@ -1197,23 +1246,27 @@ class Driver {
         if (repos.length) break;
       }
     }
-    const list = repos.filter((r) => !r.archived).sort((a, b) => a.name.localeCompare(b.name));
-    this.repoCache.set(org, { at: Date.now(), repos: list });
-    return list;
+    return repos.filter((r) => !r.archived).map(({ name, description }) => ({ name, description })).sort((a, b) => a.name.localeCompare(b.name));
   }
 
   private async projectAdd(name: string): Promise<void> {
     const org = String(config().clone?.defaultOrg ?? "");
-    this.progress(name, org ? `listing ${org}'s repos…` : "");
-    const repos = org ? await this.orgRepos(org).catch(() => []) : [];
-    this.progress(name, "");
     const have = new Set(this.snap(name)?.project.peers.map((x) => x.repo) ?? []);
-    const pickable = repos.filter((r) => !have.has(r.name));
-    const v = await this.ask({ title: `Add repos to ${name}`, ok: "Add", schema: { type: "object", order: ["pick", "folder", "spec"], properties: {
-      ...(pickable.length ? { pick: { type: "array", format: "picker", title: `${org}'s repos`, enum: pickable.map((r) => r.name),
-        enumLabels: pickable.map((r) => `${r.name}${r.description ? `   ${r.description.slice(0, 80)}` : ""}`), description: "Tick any number; each is cloned fresh into the project." } } : {}),
+    const choices = (repos: Repo[]) => {
+      const pickable = repos.filter((r) => !have.has(r.name));
+      return { enum: pickable.map((r) => r.name), enumLabels: pickable.map((r) => `${r.name}${r.description ? `   ${r.description.slice(0, 80)}` : ""}`) };
+    };
+    // the dialog at once, with the last list known; the fresh one is filled in when it comes
+    const cached = org ? this.cachedRepos(org) : null;
+    const id = `ask-${++this.askSeq}`;
+    const answer = this.ask({ title: `Add repos to ${name}`, ok: "Add", schema: { type: "object", order: ["pick", "folder", "spec"], properties: {
+      ...(org ? { pick: { type: "array", format: "picker", title: `${org}'s repos`, ...choices(cached ?? []), note: cached ? "refreshing…" : "loading…",
+        description: "Tick any number; each is cloned fresh into the project." } } : {}),
       folder: { type: "string", format: "path", title: "A folder here", description: "An existing checkout, used where it is (no clone)." },
-      spec: { type: "string", title: "Anything else", placeholder: "org/repo  https://…  git@host:repo  ~/path  (--branch B, --name N after one)", description: "Space separated: other organisations' repos, git URLs, a PR URL, paths." } } } });
+      spec: { type: "string", title: "Anything else", placeholder: "org/repo  https://…  git@host:repo  ~/path  (--branch B, --name N after one)", description: "Space separated: other organisations' repos, git URLs, a PR URL, paths." } } } }, id);
+    if (org) void this.orgRepos(org, 0).then((repos) => this.send({ op: "fill", id, key: "pick", ...choices(repos), note: "" }),
+      (e) => this.send({ op: "fill", id, key: "pick", ...choices(cached ?? []), note: `could not list them: ${errText(e)}` }));
+    const v = await answer;
     if (!v) return;
     const line = [...([] as unknown[]).concat(v.pick ?? []).filter(Boolean).map((r) => `${org}/${r}`), ...(v.folder ? [String(v.folder)] : []), ...(v.spec ? [String(v.spec)] : [])].join(" ").trim();
     if (!line) return;

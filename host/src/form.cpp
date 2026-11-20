@@ -16,6 +16,7 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QSet>
+#include <QSignalBlocker>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSpinBox>
@@ -117,6 +118,7 @@ void FormDialog::addFields(QFormLayout* form, const QJsonObject& schema, const Q
       search->setClearButtonEnabled(true);
       auto* lw = new QListWidget(box);
       lw->setProperty("picker", true); // not the object name: every field's widget is named after its key
+      lw->setProperty("note", p.value("note").toString()); // "loading…" while the driver fetches the choices
       const QJsonArray labels = p.value("enumLabels").toArray();
       QSet<QString> ticked;
       for (const auto& c : cur.toArray()) ticked << c.toString();
@@ -132,7 +134,8 @@ void FormDialog::addFields(QFormLayout* form, const QJsonObject& schema, const Q
       const auto recount = [lw, count] {
         int shown = 0, on = 0;
         for (int k = 0; k < lw->count(); ++k) { shown += !lw->item(k)->isHidden(); on += lw->item(k)->checkState() == Qt::Checked; }
-        count->setText(QString("%1 shown · %2 ticked").arg(shown).arg(on));
+        const QString note = lw->property("note").toString();
+        count->setText(QString("%1 shown · %2 ticked").arg(shown).arg(on) + (note.isEmpty() ? QString() : "   " + note));
       };
       connect(search, &QLineEdit::textChanged, lw, [lw, recount](const QString& q) {
         const QStringList words = q.split(' ', Qt::SkipEmptyParts);
@@ -229,6 +232,28 @@ void FormDialog::addFields(QFormLayout* form, const QJsonObject& schema, const Q
     f.widget->setObjectName(group.isEmpty() ? key : group + "." + key);
     fields_ << f;
     form->addRow(label, row ? row : f.widget);
+  }
+}
+
+// A picker's choices arriving while the dialog is open: ticks stay, the search still applies.
+void FormDialog::setChoices(const QString& key, const QJsonArray& choices, const QJsonArray& labels, const QString& note) {
+  for (const Field& f : fields_) {
+    auto* lw = qobject_cast<QListWidget*>(f.widget);
+    if (f.key != key || !lw || !lw->property("picker").toBool()) continue;
+    QSet<QString> ticked;
+    for (int k = 0; k < lw->count(); ++k) if (lw->item(k)->checkState() == Qt::Checked) ticked << lw->item(k)->data(Qt::UserRole).toString();
+    {
+      const QSignalBlocker hush(lw);
+      lw->clear();
+      for (int i = 0; i < choices.size(); ++i) {
+        auto* it = new QListWidgetItem(i < labels.size() ? labels[i].toString() : choices[i].toString(), lw);
+        it->setData(Qt::UserRole, choices[i].toVariant());
+        it->setFlags(it->flags() | Qt::ItemIsUserCheckable);
+        it->setCheckState(ticked.contains(choices[i].toString()) ? Qt::Checked : Qt::Unchecked);
+      }
+    }
+    lw->setProperty("note", note);
+    if (auto* search = lw->parentWidget()->findChild<QLineEdit*>()) emit search->textChanged(search->text()); // filter and count again
   }
 }
 

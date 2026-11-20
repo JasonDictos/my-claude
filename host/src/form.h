@@ -17,6 +17,7 @@ public:
   // spec: {title, text, schema, values, ok, cancel}
   FormDialog(const QJsonObject& spec, QWidget* parent = nullptr);
   QJsonObject values() const;
+  void setChoices(const QString& key, const QJsonArray& choices, const QJsonArray& labels, const QString& note);
   // Tests answer a dialog without driving its widgets.
   void answer(const QJsonObject& v) { answer_ = v; answered_ = true; accept(); }
 
