@@ -7,7 +7,8 @@ lib=@LIBDIR@/my-claude
 root="${MY_CLAUDE_ROOT:-${XDG_DATA_HOME:-$HOME/.local/share}/my-claude}"
 export MY_CLAUDE_ROOT="$root"
 stamp="$root/dist/.package-version"
-if [ "$(cat "$stamp" 2>/dev/null)" != "@VERSION@" ] || [ ! -x "$root/dist/my-claude" ] || [ ! -x "$root/bin/my-claude" ]; then
+# refreshed for a new version, and for a new build of the same one (my-claude deploy)
+if [ "$(cat "$stamp" 2>/dev/null)" != "@VERSION@" ] || [ ! -x "$root/dist/my-claude" ] || [ ! -x "$root/bin/my-claude" ] || [ "$lib/my-claude" -nt "$root/dist/my-claude" ]; then
   mkdir -p "$root/bin" "$root/dist" "$root/host"
   cp -f "$lib/my-claude" "$root/dist/.my-claude.new" && mv -f "$root/dist/.my-claude.new" "$root/dist/my-claude"
   cat > "$root/bin/my-claude.new" <<'SH'

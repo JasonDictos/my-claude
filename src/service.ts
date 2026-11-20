@@ -18,7 +18,7 @@ export function serviceCmd(args: string[]): number {
     // the RPM ships the unit itself: only turn it on
     if (existsSync(`/usr/lib/systemd/user/${UNIT}`)) {
       saveConfig({ daemon: { autoRestart: true }, autoRestart: null });
-      const r = ctl("enable", "--now", UNIT);
+      const r = ctl("enable", UNIT).status === 0 ? ctl("restart", UNIT) : ctl("enable", UNIT); // restart: new code takes over (tmux has its own scope)
       if (r.status !== 0) { console.error(r.stderr.trim()); return 1; }
       return serviceCmd(["status"]);
     }
@@ -41,7 +41,7 @@ WantedBy=default.target
 `);
     saveConfig({ daemon: { autoRestart: true }, autoRestart: null });
     ctl("daemon-reload");
-    const r = ctl("enable", "--now", UNIT);
+    const r = ctl("enable", UNIT).status === 0 ? ctl("restart", UNIT) : ctl("enable", UNIT); // restart: new code takes over (tmux has its own scope)
     if (r.status !== 0) { console.error(r.stderr.trim()); return 1; }
     console.log("auto-restart on: projects that were up come back by themselves (my-claude down keeps one down)");
     return serviceCmd(["status"]);
