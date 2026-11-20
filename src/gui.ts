@@ -271,7 +271,7 @@ function adoptShellEnv(): void {
 interface TermSpec { id: string; tab: string; title: string; color: string; attention: string; node: string; scheme?: string; textStep?: number; skey?: string }
 interface Target { name: string | null; repo: string | null; pane: string | null }
 
-const DOT_GREEN = "#5fd75f", DOT_YELLOW = "#ffd75f", DOT_RED = "#ff5f5f", DOT_GRAY = "#7a7f87";
+const DOT_YELLOW = "#ffd75f", DOT_RED = "#ff5f5f", DOT_GRAY = "#7a7f87";
 const SHELL_COLOR = "#9aa0a6", CHAT_COLOR = "#d7af5f";
 const attnBadge = (a: Attention) => attentionMark(a).trim();
 const attnColor = (a: Attention) => (a === "ask" ? DOT_RED : DOT_YELLOW);
@@ -590,8 +590,14 @@ class Driver {
     if (s.up) actions.push(act("project.down", "Bring down…", "d"));
     actions.push(act("project.delete", "Delete project…", "x"));
 
+    // dots in the project's colour, the shape saying the state (stopped: the colour muted;
+    // held by a Claude started elsewhere: a red bang)
+    const muted = (() => {
+      const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(s.color);
+      return m ? "#" + [1, 2, 3].map((i) => Math.round((parseInt(m[i], 16) + 0x60) / 2).toString(16).padStart(2, "0")).join("") : DOT_GRAY;
+    })();
     const peerNode = (peer: core.PeerSnap): Dict => {
-      const [dot, dotColor] = peer.state === "live" ? ["full", DOT_GREEN] : peer.state === "starting" ? ["half", DOT_YELLOW] : peer.state === "idle" ? ["ring", DOT_YELLOW] : peer.state === "occupied" ? ["bang", DOT_RED] : ["ring", DOT_GRAY];
+      const [dot, dotColor] = peer.state === "live" ? ["full", s.color] : peer.state === "starting" ? ["half", s.color] : peer.state === "idle" ? ["ring", s.color] : peer.state === "occupied" ? ["bang", DOT_RED] : ["ring", muted];
       const shells = s.panes.filter((x) => x.title !== tmux.PANEL_TITLE && core.shellRepo(tmux.label(x)) === peer.repo);
       const pa: Dict[] = [act("peer.focus", peer.pane ? "Go to its pane" : "Start", "", s.up || p.peers.length > 0), sep,
         act("peer.shell", "Shell in its environment", "h", !!peer.pane), act("peer.hostshell", "Host shell in its checkout", "H", s.up),
@@ -609,7 +615,7 @@ class Driver {
     const chat = s.panes.find((x) => tmux.label(x) === `chat:${name}`);
     return {
       id: `p:${name}`, label: name, color: s.color, bold: this.shown.has(name), dim: !s.up,
-      dot: s.state === "UP" ? "full" : s.state === "PARTIAL" ? "half" : "ring", dotColor: s.state === "UP" ? DOT_GREEN : s.state === "PARTIAL" ? DOT_YELLOW : DOT_GRAY,
+      dot: s.state === "UP" ? "full" : s.state === "PARTIAL" ? "half" : "ring", dotColor: s.state === "UP" || s.state === "PARTIAL" ? s.color : muted,
       badge: attnBadge(s.attn), badgeColor: attnColor(s.attn), actions,
       tooltip: [p.goal ? `Goal: ${p.goal.split("\n")[0].slice(0, 160)}` : "", p.ticket ? `Ticket: ${p.ticket}` : "", `${p.mode === "shared" ? "one shared container" : "a container per repo"} · profile ${p.profile} · ${s.state}`].filter(Boolean).join("\n"),
       children: [...s.peers.map(peerNode), ...(chat ? [{ id: `t:${name}/${chat.id}`, label: "chat", color: CHAT_COLOR, actions: [act("pane.focus", "Go to it"), act("pane.close", "Leave the chat…", "x")] }] : [])],
