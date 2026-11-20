@@ -303,6 +303,7 @@ class Driver {
 
   async run(): Promise<number> {
     this.link = await hostLink(this.sock, (ev) => this.onEvent(ev));
+    void this.ghWhoami().catch(() => {});
     // terminals already shown: our predecessor died; take them as they are, then say who we
     // are (which hands us what the user did meanwhile)
     const have = await this.list();
@@ -669,12 +670,14 @@ class Driver {
     const schemesDir = "/usr/share/qtermwidget6/color-schemes";
     const schemes = existsSync(schemesDir) ? readdirSync(schemesDir).filter((f) => f.endsWith(".colorscheme")).map((f) => f.replace(/\.colorscheme$/, "")).sort() : [];
     const sections: Dict = {
-      general: { type: "object", title: "my-claude", order: ["profile", "defaultOrg", "chatName", "peersCli", "historyLimit", "panesPerWindow", "panel"], properties: {
+      general: { type: "object", title: "my-claude", order: ["profile", "defaultOrg", "githubToken", "chatName", "peersCli", "historyLimit", "panesPerWindow", "panel"], properties: {
         historyLimit: { type: "integer", title: "Lines tmux keeps per pane", minimum: 0, maximum: 2000000, default: 50000, description: "tmux holds these in memory (about 800 bytes a line), so it is bounded. The window keeps its own scrollback, unlimited and on disk. 0: leave tmux's own setting. Applies to panes started from now on." },
         profile: { type: "string", title: "Default profile", enum: Object.keys(profiles), description: "How a new project's Claude sessions are started" },
         defaultOrg: { type: "string", title: "Default GitHub organisation", placeholder: "acme", description: "A bare repo name means a repo of this organisation: adding \"billing\" clones acme/billing. Add repos lists its repos to pick from. Other organisations: org/repo." },
         chatName: { type: "string", title: "Your name in the peers' chat", placeholder: `${process.env.USER ?? "user"}-chat` },
         peersCli: { type: "string", title: "claude-peers CLI", placeholder: "~/claude-peers-mcp/cli.ts" },
+        githubToken: { type: "string", format: "password", title: "GitHub token", placeholder: "paste a token to sign in (repo scope)",
+          description: `${this.ghWho ? `gh is signed in to GitHub as ${this.ghWho}.` : "gh is not signed in to GitHub, so the repo browser sees public repos only."} A token pasted here goes to gh's credential store, and git uses it over https (gh auth setup-git); settings.json never holds it.` },
         panesPerWindow: { type: "integer", title: "Panes per window (terminal UI)", minimum: 1, maximum: 16, default: 6 },
         panel: { type: "boolean", title: "Side panel (terminal UI)", default: true } } },
       window: { type: "object", title: "Window", order: ["font", "fontSize", "scheme", "tint", "alternate", "transparency", "blur", "panesPerGroup", "scrollback", "copyOnSelect", "panes", "openOnStart", "dropdown", "keepSolo"], properties: {
@@ -738,6 +741,7 @@ class Driver {
       const list = String(raw ?? "").split(",").map((x) => x.trim()).filter(Boolean);
       keys[id] = list.join(", ") === (def.get(id) ?? "") ? null : list;
     }
+    if (String(g.githubToken ?? "").trim()) void this.githubLogin(String(g.githubToken).trim());
     const patch: Dict = {
       profile: g.profile || null,
       clone: { defaultOrg: blank(g.defaultOrg) },
@@ -1151,6 +1155,28 @@ class Driver {
   // An organisation's repos, for the add dialog: gh when it is logged in (private ones
   // too), else GitHub's public API. Kept for ten minutes.
   private repoCache = new Map<string, { at: number; repos: { name: string; description: string }[] }>();
+  private ghWho = "";
+  // who gh is signed in as (for Settings), looked up off the critical path
+  private async ghWhoami(): Promise<string> {
+    if (!Bun.which("gh")) return (this.ghWho = "");
+    return (this.ghWho = (await sh("gh", ["api", "user", "--jq", ".login"], { ok: true })).trim());
+  }
+  // As setup_dev --token does: the token to gh's credential store, and git over https through gh.
+  private async githubLogin(token: string): Promise<void> {
+    if (!Bun.which("gh")) { this.notify("GitHub token: install the GitHub CLI (gh) first", { error: true }); return; }
+    const { GH_TOKEN: _a, GITHUB_TOKEN: _b, ...env } = process.env; // gh stores nothing while a token is in its environment
+    const run = async (args: string[], input?: string) => {
+      const p = Bun.spawn(["gh", ...args], { stdin: input === undefined ? "ignore" : "pipe", stdout: "ignore", stderr: "pipe", env });
+      if (input !== undefined && p.stdin) { p.stdin.write(input); p.stdin.end(); }
+      const [err, code] = await Promise.all([new Response(p.stderr).text(), p.exited]);
+      return code === 0 ? null : err.trim().split("\n").pop() || `gh ${args[0]} failed`;
+    };
+    const bad = (await run(["auth", "login", "--hostname", "github.com", "--with-token"], token + "\n")) ?? (await run(["auth", "setup-git", "--hostname", "github.com"]));
+    if (bad) { this.notify(`GitHub token not taken: ${bad}`, { error: true }); return; }
+    this.repoCache.clear();
+    const who = await this.ghWhoami();
+    this.notify(`gh and git are signed in to GitHub${who ? ` as ${who}` : ""}`);
+  }
   private async orgRepos(org: string): Promise<{ name: string; description: string }[]> {
     const hit = this.repoCache.get(org);
     if (hit && Date.now() - hit.at < 600_000) return hit.repos;
@@ -1189,7 +1215,7 @@ class Driver {
       folder: { type: "string", format: "path", title: "A folder here", description: "An existing checkout, used where it is (no clone)." },
       spec: { type: "string", title: "Anything else", placeholder: "org/repo  https://…  git@host:repo  ~/path  (--branch B, --name N after one)", description: "Space separated: other organisations' repos, git URLs, a PR URL, paths." } } } });
     if (!v) return;
-    const line = [...((v.pick as string[] | undefined) ?? []).map((r) => `${org}/${r}`), ...(v.folder ? [String(v.folder)] : []), ...(v.spec ? [String(v.spec)] : [])].join(" ").trim();
+    const line = [...([] as unknown[]).concat(v.pick ?? []).filter(Boolean).map((r) => `${org}/${r}`), ...(v.folder ? [String(v.folder)] : []), ...(v.spec ? [String(v.spec)] : [])].join(" ").trim();
     if (!line) return;
     await this.work(name, `adding to ${name}…`, async () => {
       const peers = await core.addRepos(name, line, { log: (m) => this.progress(name, `${name}: ${m}`) });

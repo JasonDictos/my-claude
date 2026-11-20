@@ -116,7 +116,7 @@ void FormDialog::addFields(QFormLayout* form, const QJsonObject& schema, const Q
       search->setPlaceholderText("Search…");
       search->setClearButtonEnabled(true);
       auto* lw = new QListWidget(box);
-      lw->setObjectName("picker");
+      lw->setProperty("picker", true); // not the object name: every field's widget is named after its key
       const QJsonArray labels = p.value("enumLabels").toArray();
       QSet<QString> ticked;
       for (const auto& c : cur.toArray()) ticked << c.toString();
@@ -240,7 +240,7 @@ QJsonValue FormDialog::read(const Field& f) const {
     if (f.type == "boolean") return v.toBool();
     return v.toString();
   };
-  if (auto* lw = qobject_cast<QListWidget*>(w); lw && lw->objectName() == "picker") {
+  if (auto* lw = qobject_cast<QListWidget*>(w); lw && lw->property("picker").toBool()) {
     QJsonArray a;
     for (int k = 0; k < lw->count(); ++k) if (lw->item(k)->checkState() == Qt::Checked) a << QJsonValue::fromVariant(lw->item(k)->data(Qt::UserRole));
     return a;
