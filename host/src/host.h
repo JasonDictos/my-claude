@@ -289,6 +289,9 @@ private:
   QString termOfNode(const QString& node) const;
   class QToolBar* toolbar_ = nullptr; // the operations over the list
   QIcon toolIcon(const QString& name) const;
+  QHash<QString, QSet<QString>> nodeCan_; // per list entry: the toolbar buttons that apply
+  QString contextNode();
+  void updateToolbar();
   void showToolbar(bool on);
   void showPreview(class QTreeWidgetItem* it);
   void refreshPreview();

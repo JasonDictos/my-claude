@@ -325,6 +325,19 @@ await u.shows("the menu bar back for good", (x) => x.menuBar === true, 3000);
   if (kept.gui?.paneSchemes?.["demo/r1"] !== "Solarized" || kept.gui?.paneText?.["demo/r1"] !== 3) fail("the pane's scheme and text size should be kept in settings.json", kept.gui);
 }
 
+// --- the toolbar: a button greyed when what is highlighted is not for it
+{
+  const on = (x: any, id: string) => x.toolbar?.find((t: any) => t.id === id)?.enabled;
+  u.send({ op: "sidebar", select: "p:demo" }); // a running project, the list has the keyboard
+  await u.shows("Stop on for a running project, Start off", (x) => on(x, "project.down") === true && on(x, "project.open") === false && on(x, "app.new") === true);
+  u.send({ op: "sidebar", select: "r:demo/r1" });
+  await u.shows("a running repo: the container shell on", (x) => on(x, "pane.shell") === true);
+  u.send({ op: "sidebar" }); // the list takes the keyboard: its entry is what counts
+  u.send({ op: "sidebar", select: "p:third" }); // stopped (undeleted above)
+  await u.shows("a stopped project: Start on, Stop and the shells off", (x) => on(x, "project.open") === true && on(x, "project.down") === false && on(x, "pane.shell") === false);
+  u.send({ op: "sidebar" }); // and back to the pane
+}
+
 // --- renaming in the list (what F2 sends): a display name; emptied, the default again
 u.send({ op: "emit", event: { ev: "rename", node: "p:demo", name: "Demo One" } });
 await u.shows("the project renamed", (x) => x.nodes.some((n: any) => n.id === "p:demo" && n.label === "Demo One"));

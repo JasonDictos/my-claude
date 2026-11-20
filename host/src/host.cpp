@@ -251,7 +251,9 @@ Host::Host(const QString& socketPath, const QString& driverCmd, QWidget* parent)
   center_->addWidget(placeholder_);
   center_->addWidget(tabs_);
   setCentralWidget(center_);
+  connect(qApp, &QApplication::focusChanged, this, [this] { updateToolbar(); });
   connect(tabs_, &QTabWidget::currentChanged, this, [this](int i) {
+    QTimer::singleShot(0, this, [this] { updateToolbar(); });
     if (i < 0) { setWindowTitle(remote_.isEmpty() ? QString("my-claude") : "my-claude @ " + remote_); return; }
     const QString name = tabName(i);
     setWindowTitle(name + " — my-claude" + (remote_.isEmpty() ? QString() : " @ " + remote_));
@@ -329,6 +331,7 @@ Host::Host(const QString& socketPath, const QString& driverCmd, QWidget* parent)
     emitEvent({{"ev", "activate"}, {"node", it->data(0, Qt::UserRole).toString()}});
   });
   connect(tree_, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem* it, QTreeWidgetItem*) {
+    QTimer::singleShot(0, this, [this] { updateToolbar(); });
     // walking the list brings what it points at on screen; the keyboard stays in the list
     // until Enter, Esc or a click
     if (!it || !tree_->hasFocus()) return;
@@ -773,8 +776,11 @@ void Host::handle(const QJsonObject& m, QLocalSocket* from) {
       const QString aid = it.value("id").toString();
       QAction* a = toolbar_->addAction(toolIcon(it.value("icon").toString()), it.value("label").toString());
       a->setToolTip(it.value("label").toString());
+      a->setData(aid);
+      a->setProperty("scoped", it.value("scoped").toBool()); // greyed unless the highlighted entry allows it
       connect(a, &QAction::triggered, this, [this, aid] { runAction(aid); });
     }
+    updateToolbar();
     return;
   }
   if (op == "edit") { // rename an entry in place, as F2 does
@@ -898,9 +904,11 @@ void Host::handle(const QJsonObject& m, QLocalSocket* from) {
     }
     for (auto it = nodeItems_.begin(); it != nodeItems_.end(); ++it) nodes.append(QJsonObject{{"id", it.key()}, {"label", it.value()->text(0)}, {"badge", it.value()->text(1)}});
     for (auto it = asks_.begin(); it != asks_.end(); ++it) asks.append(it.key());
+    QJsonArray tools;
+    if (toolbar_) for (QAction* a : toolbar_->actions()) if (!a->data().toString().isEmpty()) tools.append(QJsonObject{{"id", a->data().toString()}, {"enabled", a->isEnabled()}});
     for (QAction* a : actions_) acts.append(a->data().toString());
     const Tab* cur = currentTab();
-    reply(from, {{"ev", "list"}, {"terminals", terms}, {"tabs", tabNames}, {"current", cur ? cur->name : QString()}, {"nodes", nodes},
+    reply(from, {{"ev", "list"}, {"terminals", terms}, {"tabs", tabNames}, {"current", cur ? cur->name : QString()}, {"nodes", nodes}, {"toolbar", tools},
                  {"asks", asks}, {"actions", acts}, {"selected", currentNode()}, {"sidebar", dock_->isVisible()}, {"driver", driver_ != nullptr},
                  {"shown", isVisible() && !(windowState() & Qt::WindowMinimized)}, {"fullScreen", isFullScreen()}, {"keyBar", keyBar_ && keyBar_->isVisible()}, {"menuBar", menuBar()->isVisible()}, {"badges", int(badges_.size())}, {"keyBarText", keyBar_ ? keyBar_->text() : QString()}, {"activeWindow", isActiveWindow()}});
     return;
@@ -2018,6 +2026,7 @@ void Host::setTree(const QJsonArray& nodes) {
   tree_->clear();
   nodeActions_.clear();
   nodeItems_.clear();
+  nodeCan_.clear();
   std::function<void(QTreeWidgetItem*, const QJsonObject&)> add = [&](QTreeWidgetItem* parent, const QJsonObject& n) {
     auto* it = parent ? new QTreeWidgetItem(parent) : new QTreeWidgetItem(tree_);
     const QString id = n.value("id").toString();
@@ -2026,6 +2035,7 @@ void Host::setTree(const QJsonArray& nodes) {
     if (n.contains("section")) { it->setData(0, kSectionRole, true); it->setData(0, kHostRole, n.value("section").toString()); }
     if (id.startsWith("p:")) { QFont f = it->font(0); f.setBold(true); it->setFont(0, f); } // a project: bold in its colour
     if (n.contains("name")) { it->setFlags(it->flags() | Qt::ItemIsEditable); it->setData(0, kNameRole, n.value("name").toString()); }
+    if (n.contains("can")) { QSet<QString> can; for (const auto& c : n.value("can").toArray()) can << c.toString(); nodeCan_.insert(id, can); }
     if (n.contains("icon")) { it->setData(0, kKindRole, n.value("icon").toString()); it->setIcon(0, kindIcon(n.value("icon").toString())); }
     it->setText(1, n.value("badge").toString());
     it->setToolTip(0, n.value("tooltip").toString());
@@ -2047,6 +2057,7 @@ void Host::setTree(const QJsonArray& nodes) {
   tree_->blockSignals(false);
   tree_->setUpdatesEnabled(true);
   if (hadFocus) tree_->setFocus();
+  updateToolbar();
 }
 
 // A toolbar icon: host/icons/tb-<name>.svg when there is one, else the desktop theme's, else Qt's.
@@ -2061,6 +2072,25 @@ QIcon Host::toolIcon(const QString& name) const {
     {"start", {"media-playback-start", QStyle::SP_MediaPlay}}, {"stop", {"media-playback-stop", QStyle::SP_MediaStop}}};
   const auto it = theme.constFind(name);
   return it == theme.constEnd() ? QIcon() : QIcon::fromTheme(it->first, style()->standardIcon(it->second));
+}
+
+// What the toolbar acts on: the list's entry when the list has the keyboard, else the pane
+// in use (a shell's own entry, or its peer's), else the open tab's project.
+QString Host::contextNode() {
+  if (tree_->hasFocus() && !currentNode().isEmpty()) return currentNode();
+  const QString cur = currentTermId();
+  if (terms_.contains(cur)) {
+    if (nodeCan_.contains("t:" + cur)) return "t:" + cur;
+    if (!terms_[cur].node.isEmpty()) return terms_[cur].node;
+  }
+  if (Tab* t = currentTab()) return "p:" + t->name;
+  return currentNode();
+}
+
+void Host::updateToolbar() {
+  if (!toolbar_) return;
+  const QSet<QString> can = nodeCan_.value(contextNode());
+  for (QAction* a : toolbar_->actions()) if (a->property("scoped").toBool()) a->setEnabled(can.contains(a->data().toString()));
 }
 
 void Host::showToolbar(bool on) {

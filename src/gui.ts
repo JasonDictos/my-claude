@@ -456,10 +456,10 @@ class Driver {
     // the dense bar over the list: icons by name (host/icons/tb-<icon>.svg when there is one)
     const sep = { separator: true };
     this.sendIfChanged("toolbar", { op: "toolbar", items: [
-      { id: "app.new", label: "New project", icon: "new-project" }, { id: "project.add", label: "Add repos to the project", icon: "add-repos" }, sep,
-      { id: "project.open", label: "Start the project", icon: "start" }, { id: "project.down", label: "Bring the project down", icon: "stop" }, sep,
-      { id: "pane.shell", label: "Shell in its environment (container)", icon: "shell" }, { id: "pane.hostshell", label: "Host shell in its checkout", icon: "host-shell" },
-      { id: "pane.chat", label: "Chat with the peers", icon: "chat" }, sep,
+      { id: "app.new", label: "New project", icon: "new-project" }, { id: "project.add", label: "Add repos to the project", icon: "add-repos", scoped: true }, sep,
+      { id: "project.open", label: "Start the project", icon: "start", scoped: true }, { id: "project.down", label: "Bring the project down", icon: "stop", scoped: true }, sep,
+      { id: "pane.shell", label: "Shell in its environment (container)", icon: "shell", scoped: true }, { id: "pane.hostshell", label: "Host shell in its checkout", icon: "host-shell", scoped: true },
+      { id: "pane.chat", label: "Chat with the peers", icon: "chat", scoped: true }, sep,
       { id: "app.quickconnect", label: "Connect a machine", icon: "connect" }, { id: "app.undelete", label: "Undelete a project", icon: "undelete" },
       { id: "host.settings", label: "Settings", icon: "settings" }] });
     this.sendIfChanged("settings", { op: "settings", ...this.settingsSpec() });
@@ -584,6 +584,8 @@ class Driver {
     if (s.up) actions.push(act("project.down", "Bring down…", "d"));
     actions.push(act("project.rename", "Rename… (F2)"), act("project.delete", "Delete project…", "x"));
 
+    // the toolbar buttons that apply with this project highlighted (the window greys the rest)
+    const projectCan = ["project.add", ...(s.state !== "UP" ? ["project.open"] : []), ...(s.up ? ["project.down", "pane.chat"] : [])];
     const peerNode = (peer: core.PeerSnap): Dict => {
       const shells = s.panes.filter((x) => x.title !== tmux.PANEL_TITLE && core.shellRepo(tmux.label(x)) === peer.repo);
       // in a container or not: what its claude runs in when it runs, else what its profile does
@@ -599,6 +601,7 @@ class Driver {
         // a terminal like its shells (docker or not); a plain folder (a home directory) shows its path
         id: `r:${name}/${peer.repo}`, label: (peer.label || (isRepo(peer.path) ? peer.repo : `${tilde(peer.path)}/`)) + (peer.repo === p.lead ? " ★" : ""), icon: boxed ? "container" : "terminal",
         name: peer.label || (isRepo(peer.path) ? peer.repo : `${tilde(peer.path)}/`),
+        can: [...projectCan, ...(peer.state === "live" ? ["pane.shell"] : []), ...(s.up ? ["pane.hostshell"] : [])],
         dim: peer.state === "down" || peer.state === "occupied",
         badge: attnBadge(peer.attn), badgeColor: attnColor(peer.attn), actions: pa,
         tooltip: `${tilde(peer.path)}\n${peer.state}${peer.model ? " · " + peer.model : ""} · conversation ${peer.session.slice(0, 8)}`,
@@ -606,13 +609,14 @@ class Driver {
         children: shells.map((x) => {
           const inBox = !tmux.label(x).startsWith("host:") && boxed;
           return { id: `t:${name}/${x.id}`, label: x.name || (inBox ? "container shell" : "host shell"), name: x.name || (inBox ? "container shell" : "host shell"), icon: inBox ? "container" : "terminal", tooltip: tmux.label(x), color: SHELL_COLOR,
+            can: [...projectCan, ...(peer.state === "live" ? ["pane.shell"] : []), "pane.hostshell"],
             actions: [act("pane.focus", "Go to it"), act("pane.rename", "Rename… (F2)"), act("pane.close", "Close…", "x")] };
         }),
       };
     };
     const chat = s.panes.find((x) => tmux.label(x) === `chat:${name}`);
     return {
-      id: `p:${name}`, label: p.label || name, name: p.label || name, color: s.color,
+      id: `p:${name}`, label: p.label || name, name: p.label || name, color: s.color, can: projectCan,
       badge: attnBadge(s.attn), badgeColor: attnColor(s.attn), actions,
       tooltip: [p.goal ? `Goal: ${p.goal.split("\n")[0].slice(0, 160)}` : "", p.ticket ? `Ticket: ${p.ticket}` : "", `${p.mode === "shared" ? "one shared container" : "a container per repo"} · profile ${p.profile} · ${s.state}`].filter(Boolean).join("\n"),
       children: [...s.peers.map(peerNode), ...(chat ? [{ id: `t:${name}/${chat.id}`, label: "chat", color: CHAT_COLOR, actions: [act("pane.focus", "Go to it"), act("pane.close", "Leave the chat…", "x")] }] : [])],
