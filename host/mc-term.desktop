@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=my-claude
+Comment=Terminal host for my-claude projects
+Exec=mc-term
+Icon=mc-term
+Categories=Development;TerminalEmulator;
+StartupWMClass=mc-term

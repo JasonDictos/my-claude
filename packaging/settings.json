@@ -1,0 +1,9 @@
+{
+  "daemon": {
+    "autoRestart": true,
+    "ssh": {
+      "port": 0,
+      "listen": "::"
+    }
+  }
+}

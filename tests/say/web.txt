@@ -1,0 +1,16 @@
+● Three things I decided, so yell if any of them is backwards:
+
+  - Client only. The v2 switch lives behind the API client; pages don't change.
+  - Retry once. A 503 from /v2/users retries after 250 ms, then falls back to
+    the old endpoint until the worker is cut over.
+  - No new deps. The retry helper is 20 lines; a library felt like overkill.
+
+  The change is in src/api/client.ts and src/api/client.test.ts (9 of 9 pass).
+  I'm holding the push until api confirms the v2 error shape.
+
+✻ 2 messages hidden (/focus to show)
+
+❯ Move that fallback into a flag so we can turn it off per environment
+
+● Moved. The fallback is now behind API_V1_FALLBACK (default on), read once at
+  startup, and the test covers both settings. Pushed commit 9c1d0e4.

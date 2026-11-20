@@ -1,0 +1,10 @@
+// Stand-in for claude-peers' cli.ts (run with bun): records every call, and "chat" echoes
+// each stdin line as a send to its target.
+import { appendFileSync } from "node:fs";
+const log = process.env.FAKE_PEERS_LOG!;
+const args = process.argv.slice(2);
+appendFileSync(log, args.join(" ") + "\n");
+if (args[0] === "chat") {
+  const text = await new Response(Bun.stdin.stream()).text();
+  for (const line of text.split("\n").filter(Boolean)) appendFileSync(log, `send ${args[1]} ${line}\n`);
+}

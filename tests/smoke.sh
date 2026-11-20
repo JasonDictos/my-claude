@@ -1,0 +1,175 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Jason Dictos - my-claude, https://github.com/JasonDictos/my-claude
+# Provisioning smoke test on the host profile with a fake claude:
+# new/add x4/up -> 4 tiled panes with titles; --session-id first, --resume once
+# a transcript exists; down kills; up recreates; add while up -> 5th pane.
+set -euo pipefail
+here=$(cd "$(dirname "$0")" && pwd)
+tmp=$(mktemp -d); trap 'tmux kill-server 2>/dev/null || true; rm -rf "$tmp"' EXIT
+# Private tmux server: panes inherit the server's environment, so it must be ours.
+export TMUX_TMPDIR=$tmp; unset TMUX
+export MY_CLAUDE_ROOT=$tmp/root MY_CLAUDE_CLAUDE=$here/fake-claude FAKE_CLAUDE_LOG=$tmp/claude.log HOME=$tmp/home
+mkdir -p "$MY_CLAUDE_ROOT" "$HOME" "$tmp/r1" "$tmp/r2" "$tmp/r3" "$tmp/r4" "$tmp/r5" "$tmp/r6" "$tmp/r7"
+ln -s "$here/../src" "$MY_CLAUDE_ROOT/src"; ln -s "$here/../bin" "$MY_CLAUDE_ROOT/bin"; ln -s "$here/../node_modules" "$MY_CLAUDE_ROOT/node_modules"
+echo '{"profile":"host","peers":{"cli":"/nonexistent/claude-peers-cli"}}' > "$MY_CLAUDE_ROOT/config.json"
+mc() { bun "$MY_CLAUDE_ROOT/src/cli.ts" "$@"; }
+fail() { echo "FAIL: $*" >&2; exit 1; }
+bun "$here/gate.ts" >/dev/null || fail "the ssh gate (tests/gate.ts)"
+panes() { tmux list-panes -s -t mc-smoke -F '#{pane_title}' | grep -v '^my-claude-panel$' | sort | tr '\n' ' '; }
+panel() { tmux list-panes -t mc-smoke:1 -F '#{pane_title} #{pane_left} #{pane_width}' | grep '^my-claude-panel '; }
+wins() { tmux list-windows -t mc-smoke -F '#{window_index}' | wc -l; }
+panels() { tmux list-panes -s -t mc-smoke -F '#{pane_title}' | grep -c '^my-claude-panel$'; }
+lines() { [ -f "$FAKE_CLAUDE_LOG" ] && wc -l < "$FAKE_CLAUDE_LOG" || echo 0; }
+wait_log() { for _ in $(seq 75); do [ "$(lines)" -ge "$1" ] && return; sleep 0.2; done; fail "expected $1 launches, log: $(cat "$FAKE_CLAUDE_LOG" 2>/dev/null)"; }
+
+mc new smoke --goal "test goal" >/dev/null
+for i in 1 2 3 4; do mc add smoke "$tmp/r$i" >/dev/null; done
+[ "$(mc status smoke --json | jq -r .lead)" = null ] || fail "nobody leads by default"
+mc up smoke --no-attach >/dev/null
+wait_log 4
+[ "$(panes)" = "r1 r2 r3 r4 " ] || fail "panes: $(panes)"
+[ "$(panel)" = "my-claude-panel 0 30" ] || fail "side panel missing or not a 30-col left column: $(panel)"
+grep -q -- "--session-id" "$FAKE_CLAUDE_LOG" || fail "first launch should use --session-id"
+grep -q -- "--name smoke/r1" "$FAKE_CLAUDE_LOG" || fail "peer name missing"
+st=$(mc ls --json | jq -r '.[0].state'); [[ $st = UP || $st = PARTIAL ]] || fail "ls state after up: '$st'"
+mc ls | grep -q '^smoke ' || fail "ls table"
+mc status smoke | grep -q '^r1 ' || fail "status table"
+
+# A big float in front (a shell) must not become the split target: the new peer stays docked.
+tmux new-pane -d -t mc-smoke -T shell:r1 -x 90% -y 90% sleep 300
+mc add smoke "$tmp/r5" --model opus-5.5 >/dev/null
+wait_log 5
+[ "$(tmux list-panes -s -t mc-smoke -F '#{pane_title} #{pane_floating_flag}' | grep '^r5 ')" = "r5 0" ] || fail "peer added over a float must be docked"
+tmux kill-pane -t "$(tmux list-panes -s -t mc-smoke -F '#{pane_id} #{pane_title}' | awk '$2=="shell:r1"{print $1}')"
+[ "$(panes)" = "r1 r2 r3 r4 r5 " ] || fail "5th pane: $(panes)"
+[ "$(wins)" = 1 ] || fail "5 peers should still be one window, got $(wins)"
+# Spill: the 7th peer opens a second window (tab) with its own panel; removing it closes the tab.
+mc add smoke "$tmp/r6" >/dev/null; mc add smoke "$tmp/r7" >/dev/null; wait_log 7
+[ "$(wins)" = 2 ] || fail "7 peers should spill into 2 windows, got $(wins)"
+[ "$(panels)" = 2 ] || fail "each window needs a panel, got $(panels)"
+[ "$(tmux list-panes -t mc-smoke:2 -F '#{pane_title}' | grep -v panel)" = "r7" ] || fail "r7 should be alone in window 2"
+mc rm smoke r7 >/dev/null; sleep 1
+[ "$(wins)" = 1 ] || fail "empty tab should close, got $(wins)"
+mc rm smoke r6 >/dev/null
+grep -q -- "--model opus-5.5" "$FAKE_CLAUDE_LOG" || fail "model not passed"
+
+mc lead smoke r2 "ship it" >/dev/null; [ "$(mc status smoke --json | jq -r '[.lead,.goal,.peers[0].role,.peers[1].role]|join(",")')" = "r2,ship it,peer,lead" ] || fail "lead+goal"
+mc set smoke r3 --model sonnet-5.5 >/dev/null; [ "$(mc status smoke --json | jq -r '.peers[2].model')" = sonnet-5.5 ] || fail "set model"
+
+mc down smoke >/dev/null
+tmux has-session -t mc-smoke 2>/dev/null && fail "session should be gone"
+[ "$(mc ls --json | jq -r '.[0].state')" = DOWN ] || fail "ls should say DOWN"
+
+# A transcript for r1 -> its relaunch resumes by id.
+sid=$(mc status smoke --json | jq -r '.peers[0].session')
+tdir="$HOME/.claude/projects/$(printf '%s' "$tmp/r1" | sed 's/[^A-Za-z0-9]/-/g')"; mkdir -p "$tdir"; : > "$tdir/$sid.jsonl"
+: > "$FAKE_CLAUDE_LOG"
+mc up smoke --no-attach >/dev/null
+wait_log 5
+grep -q -- "$tmp/r1 --resume $sid" "$FAKE_CLAUDE_LOG" || fail "r1 should --resume $sid: $(cat "$FAKE_CLAUDE_LOG")"
+grep -q -- "$tmp/r2 --session-id" "$FAKE_CLAUDE_LOG" || fail "r2 should still --session-id"
+
+# Symbol index: ctags over each peer at launch, into projects/<p>/.my-claude/<repo>/tags; rebuildable by hand.
+printf 'int smoke_fn(int a) { return a; }\n' > "$tmp/r1/smoke.c"
+mc index smoke r1 >/dev/null || fail "index"
+grep -q -P '^smoke_fn\t' "$MY_CLAUDE_ROOT/projects/smoke/.my-claude/r1/tags" || fail "index should hold smoke_fn"
+grep -q 'smoke_fn.*signature:(int a)' "$MY_CLAUDE_ROOT/projects/smoke/.my-claude/r1/tags" || fail "index should carry signatures"
+[ "$(mc index smoke | wc -l)" = 5 ] || fail "index with no repo indexes every peer"
+grep -q -- "Symbol index: $MY_CLAUDE_ROOT/projects/smoke/.my-claude/r1/tags" "$FAKE_CLAUDE_LOG" || fail "brief should name the index"
+# Ticket: set, shown, briefed, cleared.
+mc ticket smoke abc-77 | grep -q 'ABC-77' || fail "ticket set"
+[ "$(mc ticket smoke)" = ABC-77 ] || fail "ticket get"
+[ "$(mc status smoke --json | jq -r .ticket)" = ABC-77 ] || fail "ticket in status"
+mc ticket smoke nonsense 2>/dev/null && fail "a bad key must be refused"
+mc ticket smoke - >/dev/null; [ "$(mc ticket smoke)" = "-" ] || fail "ticket clear"
+
+# prefix+x on a peer pane = remove the peer; on a shell pane = just close it.
+pid=$(tmux list-panes -s -t mc-smoke -F '#{pane_id} #{pane_title}' | awk '$2=="r4"{print $1}')
+mc _close "$pid" | grep -q '^removed r4' || fail "_close on a peer pane should remove it"
+[ "$(mc status smoke --json | jq '.peers|length')" = 4 ] || fail "r4 should be gone from the record"
+[ "$(panes)" = "r1 r2 r3 r5 " ] || fail "r4 pane should be gone: $(panes)"
+mc add smoke "$tmp/r4" >/dev/null; wait_log 6
+
+sid5=$(mc status smoke --json | jq -r '.peers[]|select(.repo=="r5").session')
+mc rm smoke r5 >/dev/null
+[ "$(mc status smoke --json | jq '.peers|length')" = 4 ] || fail "rm"
+mc readd smoke | grep -q '^r5 ' || fail "readd should list r5 as removed"
+mc readd smoke r5 >/dev/null || fail "readd"
+[ "$(mc status smoke --json | jq -r '.peers[]|select(.repo=="r5").session')" = "$sid5" ] || fail "readd must keep the conversation"
+wait_log 7
+
+# Exact session names: a project whose name starts another's is not up because that one is.
+mc new smo >/dev/null; mc add smo "$tmp/r6" >/dev/null
+[ "$(mc status smo --json | jq -r .state)" = DOWN ] || fail "smo must not pass for smoke (session prefix match)"
+mc down smo | grep -q 'already down' || fail "down smo must not touch smoke"
+tmux has-session -t '=mc-smoke' || fail "smoke must survive 'down smo'"
+mc delete smo >/dev/null
+tmux show-hooks -g | grep -q '_tile' || fail "layout hooks not installed: $(tmux show-hooks -g | head -3)"
+# tmux's scrollback is memory: my-claude's panes get a bound, the server's own default is left as it was.
+r1p=$(tmux list-panes -s -t '=mc-smoke' -F '#{pane_id} #{pane_title}' | awk '$2=="r1"{print $1}')
+[ "$(tmux display-message -p -t "$r1p" '#{history_limit}')" = 50000 ] || fail "a pane should get the bounded history, got $(tmux display-message -p -t "$r1p" '#{history_limit}')"
+[ "$(tmux show-options -gv history-limit)" = 2000 ] || fail "the global history limit must be put back, is $(tmux show-options -gv history-limit)"
+
+# Layouts. solo: every pane a window of its own and no panel (what the native app shows),
+# shells are tagged windows; grid packs everything back behind the panel.
+mc layout smoke solo >/dev/null
+[ "$(mc layout smoke)" = solo ] || fail "layout not recorded"
+[ "$(panels)" = 0 ] || fail "solo keeps no panel, got $(panels)"
+[ "$(wins)" = 5 ] || fail "solo: one window per peer, got $(wins)"
+[ "$(tmux list-windows -t mc-smoke -F '#{window_panes}' | sort -u)" = 1 ] || fail "solo: one pane per window"
+[ "$(panes)" = "r1 r2 r3 r4 r5 " ] || fail "solo lost a pane: $(panes)"
+sh1=$(bun -e 'const c = await import(process.argv[1]); console.log(await c.openShell("smoke", "r1"));' "$MY_CLAUDE_ROOT/src/core.ts")
+[ "$(tmux display-message -p -t "$sh1" '#{@mc_role} #{pane_floating_flag}')" = "shell:r1 0" ] || fail "solo shell should be a tagged window: $sh1"
+[ "$(wins)" = 6 ] || fail "solo shell should be its own window, got $(wins)"
+# A shell whose program renames it after its repo is still a shell: closing it never costs the peer.
+tmux select-pane -t "$sh1" -T r1
+mc _close "$sh1" | grep -q '^closed' || fail "_close on a retitled shell must only close it"
+[ "$(mc status smoke --json | jq '.peers|length')" = 5 ] || fail "a retitled shell cost a peer"
+mc add smoke "$tmp/r6" >/dev/null; wait_log 8
+[ "$(wins)" = 6 ] && [ "$(panels)" = 0 ] || fail "a peer added in solo gets its own window and no panel: $(wins) windows, $(panels) panels"
+
+# A view (what one pane of the native app runs): a grouped session on that pane's window
+# with no status bar, which ends the moment its window changes.
+p2=$(tmux list-panes -s -t '=mc-smoke' -F '#{pane_id} #{pane_title}' | awk '$2=="r2"{print $1}')
+v="mcv-smoke-${p2#%}"
+view() { script -qfc "bun $MY_CLAUDE_ROOT/src/cli.ts _view smoke $p2" /dev/null >/dev/null 2>&1 & for _ in $(seq 50); do tmux has-session -t "=$v" 2>/dev/null && return; sleep 0.1; done; fail "view session did not start"; }
+view
+got=$(tmux display-message -p -t "=$v:" '#{session_group} #{status} #{pane_id}')
+[ "$got" = "mc-smoke off $p2" ] || fail "view should show r2's window without a status bar: $got"
+[ "$(mc ls --json | jq -r '.[] | select(.name=="smoke") | .state')" != DOWN ] || fail "ls with a view attached"
+[ "$(mc status smoke --json | jq '.peers|length')" = 6 ] || fail "status with a view attached"
+tmux select-window -t "=$v:+1"; sleep 0.6
+tmux has-session -t "=$v" 2>/dev/null && fail "a view that changed window must end"
+
+mc layout smoke grid >/dev/null
+[ "$(mc layout smoke)" = grid ] || fail "grid not recorded"
+[ "$(wins)" = 1 ] || fail "grid should pack 6 panes into one window, got $(wins)"
+[ "$(panels)" = 1 ] || fail "grid brings the panel back, got $(panels)"
+[ "$(panes)" = "r1 r2 r3 r4 r5 r6 " ] || fail "grid lost a pane: $(panes)"
+mc rm smoke r6 >/dev/null
+# Chat pane: the user joins the group for as long as it runs, typed lines go to the group.
+echo "{\"profile\":\"host\",\"peers\":{\"cli\":\"$here/fake-peers\"},\"chat\":{\"name\":\"tester\"}}" > "$MY_CLAUDE_ROOT/config.json"
+export FAKE_PEERS_LOG=$tmp/peers.log
+printf 'hello all\n' | mc _chat smoke >/dev/null
+grep -q '^group mc-smoke .* tester$' "$FAKE_PEERS_LOG" || fail "chat should add tester to the group: $(cat "$FAKE_PEERS_LOG")"
+grep -q '^broadcast mc-smoke .*tester (the user) joined' "$FAKE_PEERS_LOG" || fail "chat should announce the join"
+grep -q '^chat mc-smoke --name tester --cwd ' "$FAKE_PEERS_LOG" || fail "chat should run the peers chat"
+grep -q '^send mc-smoke hello all$' "$FAKE_PEERS_LOG" || fail "typed line should reach the group"
+tail -1 "$FAKE_PEERS_LOG" | grep -q '^group mc-smoke ' && ! tail -1 "$FAKE_PEERS_LOG" | grep -q ' tester$' || fail "leaving should drop tester from the group: $(tail -1 "$FAKE_PEERS_LOG")"
+[ -e "$MY_CLAUDE_ROOT/projects/smoke/.my-claude/chat.json" ] && fail "chat marker left behind"
+grep -q 'claude-peers peer "' "$FAKE_CLAUDE_LOG" || fail "brief should name the chat peer"  # launched before chat.name was set: any name
+echo '{"profile":"host","peers":{"cli":"/nonexistent/claude-peers-cli"}}' > "$MY_CLAUDE_ROOT/config.json"
+mc rm smoke r5 >/dev/null
+cp "$MY_CLAUDE_ROOT/projects/smoke/project.json" "$tmp/smoke.json"
+# Bringing a project down takes its views with it: they share its windows and would keep the peers alive.
+p2=$(tmux list-panes -s -t '=mc-smoke' -F '#{pane_id} #{pane_title}' | awk '$2=="r2"{print $1}'); v="mcv-smoke-${p2#%}"
+view
+mc delete smoke >/dev/null
+tmux list-sessions -F '#S' 2>/dev/null | grep -q smoke && fail "sessions left after delete: $(tmux list-sessions -F '#S' | tr '\n' ' ')"
+[ "$(mc ls --json)" = "[]" ] || fail "delete"
+mc undelete | grep -q '^smoke ' || fail "undelete should list the trashed project"
+mc undelete smoke >/dev/null || fail "undelete"
+cmp -s "$tmp/smoke.json" "$MY_CLAUDE_ROOT/projects/smoke/project.json" || fail "undelete must restore the record (paths, session ids) unchanged"
+mc delete smoke >/dev/null
+echo "smoke OK"

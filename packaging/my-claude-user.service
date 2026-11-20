@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Jason Dictos - my-claude, https://github.com/JasonDictos/my-claude
+[Unit]
+Description=my-claude daemon: owns project state, brings projects back up, optional ssh endpoint
+After=default.target
+
+[Service]
+Type=simple
+# a login shell: PATH, tokens and whatever else the profiles need, as in a terminal
+ExecStart=/bin/bash -lc 'exec /usr/bin/my-claude daemon'
+Restart=always
+RestartSec=10
+# only the loop is stopped; tmux and the projects run in a scope of their own
+KillMode=process
+
+[Install]
+WantedBy=default.target
