@@ -121,7 +121,7 @@ class Daemon {
       switch (m.op) {
         case "ping": return { ev: "pong", pid: process.pid };
         case "status": case "subscribe": return this.status();
-        case "up": { const r = await this.work(m.project, "starting", () => core.up(m.project)); await core.syncGroupNow(m.project).catch(() => {}); return { ev: "up", project: m.project, report: r }; }
+        case "up": { const r = await this.work(m.project, "starting", () => core.up(m.project, { takeover: !!m.takeover })); await core.syncGroupNow(m.project).catch(() => {}); return { ev: "up", project: m.project, report: r }; }
         case "down": return { ev: "down", project: m.project, done: await this.work(m.project, "stopping", () => core.down(m.project)) };
         default: return { ev: "error", error: `unknown op ${m.op}` };
       }

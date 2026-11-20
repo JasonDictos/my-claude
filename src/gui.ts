@@ -1101,13 +1101,19 @@ class Driver {
     if (i >= 0 && !checks[i].ok) throw new Error(`${machine}: ${checks[i].why}`);
     const h = hosts[machine];
     await this.work(`${name}@${machine}`, `creating ${name} on ${machine}…`, async () => {
-      const step = async (args: string[]) => { const r = await this.onMachine(h, args); if (!r.ok) throw new Error(`${machine}: ${r.out.split("\n").pop()}`); };
-      await step(["new", name, ...(v.goal ? ["--goal", String(v.goal)] : []), ...(v.color ? ["--color", String(v.color)] : []), ...(v.ticket ? ["--ticket", String(v.ticket)] : []), ...(v.mode === "shared" ? ["--shared"] : [])]);
-      if (String(v.repos ?? "").trim()) {
-        await step(["add", name, ...String(v.repos).trim().split(/\s+/)]);
-        await step(["up", name, "--no-attach"]);
+      // `fine`: what a retry meets after an earlier attempt failed further on
+      const step = async (args: string[], fine?: RegExp) => {
+        const r = await this.onMachine(h, args);
+        if (!r.ok && !(fine && fine.test(r.out))) throw new Error(`${machine}: ${r.out.split("\n").pop()}`);
+      };
+      try {
+        await step(["new", name, ...(v.goal ? ["--goal", String(v.goal)] : []), ...(v.color ? ["--color", String(v.color)] : []), ...(v.ticket ? ["--ticket", String(v.ticket)] : []), ...(v.mode === "shared" ? ["--shared"] : [])], /project '[^']*' exists/);
+        const specs = core.splitRepoSpecs(String(v.repos ?? "").trim());
+        for (const spec of specs) await step(["add", name, ...spec.split(/\s+/), "--takeover"], /already in/);
+        if (specs.length) await step(["up", name, "--no-attach", "--takeover"]);
+      } finally {
+        this.connectMachine(machine, h); // its projects in this window, a half-made one included
       }
-      this.connectMachine(machine, h); // its projects in this window (the new one among them)
       this.notify(`created ${name} on ${machine}`);
     });
   }
@@ -1116,9 +1122,9 @@ class Driver {
     await this.work(name, `creating ${name}…`, async () => {
       core.newProject(name, { goal: o.goal || undefined, shared: o.shared, color: o.color, ticket: o.ticket || undefined });
       if (!repos.trim()) { this.notify(`created ${name}; add repos to start it`); return; }
-      await core.addRepos(name, repos, { log: (m) => this.progress(name, `${name}: ${m}`) });
+      await core.addRepos(name, repos, { log: (m) => this.progress(name, `${name}: ${m}`), takeover: true });
       await core.ensureBinary();
-      await core.up(name);
+      await core.up(name, { takeover: true }); // its repos were just added: wanted here
       await core.syncGroupNow(name);
       this.show(name);
     });
@@ -1271,7 +1277,7 @@ class Driver {
     const line = [...([] as unknown[]).concat(v.pick ?? []).filter(Boolean).map((r) => `${org}/${r}`), ...(v.folder ? [String(v.folder)] : []), ...(v.spec ? [String(v.spec)] : [])].join(" ").trim();
     if (!line) return;
     await this.work(name, `adding to ${name}…`, async () => {
-      const peers = await core.addRepos(name, line, { log: (m) => this.progress(name, `${name}: ${m}`) });
+      const peers = await core.addRepos(name, line, { log: (m) => this.progress(name, `${name}: ${m}`), takeover: true });
       await core.syncGroupNow(name);
       this.notify(`added ${peers.map((p) => p.repo).join(", ")} to ${name}`);
     });

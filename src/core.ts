@@ -121,7 +121,7 @@ export async function indexAll(name: string, wait = false): Promise<string[]> {
   return (await Promise.all(load(name).peers.map((x) => index(name, x.repo, wait)))).filter((x): x is string => !!x);
 }
 
-export async function addPeer(name: string, path: string, o: { role?: Role; model?: string | null; repo?: string; origin?: string; branch?: string } = {}): Promise<Peer> {
+export async function addPeer(name: string, path: string, o: { role?: Role; model?: string | null; repo?: string; origin?: string; branch?: string; takeover?: boolean } = {}): Promise<Peer> {
   const p = load(name);
   let real: string;
   try {
@@ -146,7 +146,7 @@ export async function addPeer(name: string, path: string, o: { role?: Role; mode
   trustPath(real);
   p.peers.push(peer);
   save(p);
-  if (await tmux.sessionUp(name)) await spawn(p, peer);
+  if (await tmux.sessionUp(name)) await bring(p, peer, !!o.takeover);
   void syncGroup(p).then(() => tellGroup(p, `${repo} joined the project at ${real}; it starts when the project is next brought up or added while up.`));
   return peer;
 }
@@ -316,14 +316,14 @@ export function splitRepoSpecs(line: string): string[] {
 }
 
 // Add every spec on the line, in order; stops at the first failure.
-export async function addRepos(name: string, line: string, o: { role?: Role; model?: string | null; log?: (s: string) => void } = {}): Promise<Peer[]> {
+export async function addRepos(name: string, line: string, o: { role?: Role; model?: string | null; log?: (s: string) => void; takeover?: boolean } = {}): Promise<Peer[]> {
   const added: Peer[] = [];
   for (const spec of splitRepoSpecs(line)) added.push(await addRepo(name, spec, { ...o, role: added.length ? undefined : o.role }));
   return added;
 }
 
 // Resolve the spec into a directory under the project tree, cloning if needed, then register it.
-export async function addRepo(name: string, line: string, o: { role?: Role; model?: string | null; log?: (s: string) => void } = {}): Promise<Peer> {
+export async function addRepo(name: string, line: string, o: { role?: Role; model?: string | null; log?: (s: string) => void; takeover?: boolean } = {}): Promise<Peer> {
   const p = load(name);
   const spec = await parseRepoSpec(line);
   const repo = spec.name ?? (spec.kind === "path" ? spec.repo : spec.repo.split("/")[1].replace(/\.git$/, ""));
@@ -355,7 +355,7 @@ export async function addRepo(name: string, line: string, o: { role?: Role; mode
     if (failed) die(`clone failed: ${failed}`);
     path = slot;
   }
-  return await addPeer(name, path, { role: o.role, model: o.model, repo, ...(spec.kind === "clone" ? { origin: spec.repo, branch: spec.branch } : {}) });
+  return await addPeer(name, path, { role: o.role, model: o.model, repo, takeover: o.takeover, ...(spec.kind === "clone" ? { origin: spec.repo, branch: spec.branch } : {}) });
 }
 
 export async function rmPeer(name: string, repo: string): Promise<string> {
@@ -522,7 +522,7 @@ export async function readd(name: string, repo: string, log?: (s: string) => voi
   p.peers.push(peer);
   p.removed = (p.removed ?? []).filter((x) => x.repo !== repo);
   save(p);
-  if (await tmux.sessionUp(name)) await spawn(p, peer);
+  if (await tmux.sessionUp(name)) await bring(p, peer, false);
   void syncGroup(p).then(() => tellGroup(p, `${repo} is back in the project at ${peer.path}, same conversation as before.`));
   return peer;
 }
@@ -566,6 +566,16 @@ export async function startProject(o: { name: string; repos: string[]; workOrder
   if (bin) notes.push(bin);
   for (const r of await up(name)) if (r.action === "skipped") notes.push(`${r.repo}: skipped, ${r.detail}`);
   return { name, peers: q.peers.map((x) => x.repo), lead, notes };
+}
+
+// A peer joining a running session. A conversation already open in a Claude started elsewhere
+// is taken over when asked (adding a repo means wanting it here), else left where it is.
+async function bring(p: Project, peer: Peer, takeover: boolean): Promise<void> {
+  if ((await peerState(p, peer)) === "occupied") {
+    if (!takeover) return;
+    if (!await killOccupant(peer.path)) die(`could not stop the session on ${peer.path}`);
+  }
+  await spawn(p, peer);
 }
 
 async function spawn(p: Project, peer: Peer): Promise<string> {
@@ -624,7 +634,7 @@ export interface UpReport {
 }
 
 // Idempotent: launches only what is missing, never touches a live or stranger-held repo.
-export async function up(name: string): Promise<UpReport[]> {
+export async function up(name: string, o: { takeover?: boolean } = {}): Promise<UpReport[]> {
   if (existsSync("/.dockerenv")) die("up runs on the host, not in a container");
   const p = load(name);
   if (p.peers.length === 0) die(`${name} has no peers (my-claude add)`);
@@ -637,6 +647,10 @@ export async function up(name: string): Promise<UpReport[]> {
     else if (st === "idle") {
       await relaunchInPane(p, peer, (await tmux.paneOf(name, peer.repo))!);
       report.push({ repo: peer.repo, action: "relaunched" });
+    } else if (st === "occupied" && o.takeover) {
+      if (!await killOccupant(peer.path)) die(`could not stop the session on ${peer.path}`);
+      await spawn(p, peer);
+      report.push({ repo: peer.repo, action: "launched", detail: "taken over" });
     } else if (st === "occupied") {
       const lock = lockInfo(peer.path);
       report.push({ repo: peer.repo, action: "skipped", detail: `pid ${occupantPid(peer.path)}${lock?.started ? `, since ${String(lock.started).slice(11, 16)}` : ""}` });
@@ -647,7 +661,7 @@ export async function up(name: string): Promise<UpReport[]> {
   }
   if (!await tmux.sessionUp(name)) {
     const held = report.filter((r) => r.action === "skipped");
-    die(held.map((r) => `${r.repo}: its conversation is open in a Claude started outside my-claude (${r.detail}); to move it here: my-claude takeover ${name} ${r.repo}`).join("\n") || "nothing launched");
+    die(held.map((r) => `${r.repo}: its conversation is open in a Claude started outside my-claude (${r.detail}); to move it here: my-claude up ${name} --takeover`).join("\n") || "nothing launched");
   }
   // Panes for repos that are no longer peers (removed while the session was down, or
   // a record edited by hand): my-claude made them, my-claude closes them.

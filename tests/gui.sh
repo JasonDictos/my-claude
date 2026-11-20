@@ -14,7 +14,7 @@ trap 'kill $(cat "$tmp"/host.pid* 2>/dev/null) 2>/dev/null || true; tmux kill-se
 export TMUX_TMPDIR=$tmp; unset TMUX TMUX_PANE
 export MY_CLAUDE_ROOT=$tmp/root MY_CLAUDE_CLAUDE=$here/fake-claude FAKE_CLAUDE_LOG=$tmp/claude.log HOME=$tmp/home
 export MY_CLAUDE_NO_SHELL_ENV=1 MC_TERM_NO_STATE=1 MC_TERM_TEST=1 QT_QPA_PLATFORM=offscreen
-mkdir -p "$MY_CLAUDE_ROOT" "$HOME" "$tmp/r1" "$tmp/r2" "$tmp/r3" "$tmp/r4" "$tmp/r5"
+mkdir -p "$MY_CLAUDE_ROOT" "$HOME" "$tmp/r1" "$tmp/r2" "$tmp/r3" "$tmp/r4" "$tmp/r5" "$tmp/r6"
 ln -s "$here/../src" "$MY_CLAUDE_ROOT/src"; ln -s "$here/../bin" "$MY_CLAUDE_ROOT/bin"; ln -s "$here/../node_modules" "$MY_CLAUDE_ROOT/node_modules"
 export E2E_PANES=${E2E_PANES:-native}
 echo "{\"profile\":\"host\",\"peers\":{\"cli\":\"/nonexistent/claude-peers-cli\"},\"gui\":{\"panes\":\"$E2E_PANES\"}}" > "$MY_CLAUDE_ROOT/config.json"

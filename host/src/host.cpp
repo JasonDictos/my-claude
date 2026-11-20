@@ -41,6 +41,7 @@
 #include <QTabBar>
 #include <QTabWidget>
 #include <QTest>
+#include <QSysInfo>
 #include <QThread>
 #include <QTimer>
 #include <QStyle>
@@ -2489,7 +2490,14 @@ QStringList Host::tmuxFor(const QString& key, QString* session) const {
 }
 
 void Host::rebuildTree() {
-  QJsonArray all = localTree_;
+  // every project says where it runs: this machine's by its host name, like the others'
+  const QString here = remote_.isEmpty() ? QSysInfo::machineHostName().section('.', 0, 0) : remote_.section('@', -1);
+  QJsonArray all;
+  for (const auto& v : localTree_) {
+    QJsonObject n = v.toObject();
+    if (!here.isEmpty() && n.value("id").toString().startsWith("p:")) n["label"] = n.value("label").toString() + "@" + here;
+    all << n;
+  }
   for (const Machine& mc : machines_) {
     if (!mc.tree.isEmpty()) { for (const auto& v : mc.tree) all << v; continue; }
     // not connected (yet, or any more): one entry that says so

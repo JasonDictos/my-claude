@@ -12,12 +12,12 @@ import { ROOT, UsageError, load, type Role } from "./store.ts";
 
 const USAGE = `usage: my-claude [cui] [--remote user@host] <command> [args]   (no command: the menu)
   new    <project> [--goal TEXT] [--shared] [--profile P] [--color blue|orange|green|purple|red|yellow|teal|pink] [--ticket KEY]
-  add    <project> <spec> [<spec>...] [--model M]
+  add    <project> <spec> [<spec>...] [--model M] [--takeover]
          spec: <path> | <repo> | <org>/<repo> | <git url> | <PR url>, each with optional --branch B --name N
          a path is symlinked into projects/<project>/; anything else is cloned there fresh
   rm     <project> <repo>                remembered: readd puts it back with the same path and conversation
   readd  <project> [<repo>]              re-add a removed repo (no repo: list what was removed)
-  up     <project> [--no-attach]
+  up     <project> [--no-attach] [--takeover]   --takeover: a conversation open in a Claude started elsewhere moves here
   attach <project> [<repo>]
   down   <project>
   ls     [--json]
@@ -152,9 +152,10 @@ async function main(argv: string[]): Promise<number> {
       const [project, ...specWords] = rest;
       if (!project) usage();
       const words: string[] = [];
-      const o: { model?: string | null } = {};
+      const o: { model?: string | null; takeover?: boolean } = {};
       for (let i = 0; i < specWords.length; i++) {
         if (specWords[i] === "--model") o.model = specWords[++i] ?? usage();
+        else if (specWords[i] === "--takeover") o.takeover = true;
         else words.push(specWords[i]);
       }
       if (!words.length) usage();
@@ -168,12 +169,13 @@ async function main(argv: string[]): Promise<number> {
       return core.syncGroupNow(rest[0]).then(() => 0);
     }
     case "up": {
-      const { opts, pos } = parse(rest, [], ["--no-attach"]);
+      const { opts, pos } = parse(rest, [], ["--no-attach", "--takeover"]);
       if (pos.length !== 1) usage();
       // the daemon, when it runs, is the one that changes projects
-      const viaDaemon = await (await import("./daemon.ts")).daemonCall({ op: "up", project: pos[0] }, 600_000);
+      const takeover = !!opts.takeover;
+      const viaDaemon = await (await import("./daemon.ts")).daemonCall({ op: "up", project: pos[0], takeover }, 600_000);
       if (viaDaemon?.ev === "error") { console.error(`my-claude: ${viaDaemon.error}`); return 1; }
-      for (const r of viaDaemon?.report ?? await core.up(pos[0])) {
+      for (const r of viaDaemon?.report ?? await core.up(pos[0], { takeover })) {
         console.log(r.action === "skipped" ? `${r.repo}: SKIP, occupied by a session my-claude did not start:\n   ${r.detail}` : `${r.repo}: ${r.action}`);
       }
       await core.syncGroupNow(pos[0]);

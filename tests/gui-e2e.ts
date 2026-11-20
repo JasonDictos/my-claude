@@ -263,6 +263,14 @@ await u.answer({});
 await u.shows("held taken over, in the window", (x) => titles(x, "held") === "r5", 30000);
 for (let i = 0; i < 50 && stranger.exitCode === null && stranger.signalCode === null; i++) await Bun.sleep(100);
 if (stranger.exitCode === null && stranger.signalCode === null) { stranger.kill(); fail("taking over should have ended the session started by hand"); }
+// adding a repo whose conversation is open elsewhere takes it over without asking
+const stranger2 = Bun.spawn([process.env.MY_CLAUDE_CLAUDE!], { cwd: join(tmp, "r6"), stdio: ["ignore", "ignore", "ignore"], env: { ...process.env, FAKE_CLAUDE_LOG: join(tmp, "stranger.log") } });
+await Bun.sleep(300);
+u.act("project.add", { node: "p:held" });
+await u.answer({ spec: join(tmp, "r6") });
+await u.shows("r6 added and taken over", (x) => titles(x, "held") === "r5,r6", 30000);
+for (let i = 0; i < 50 && stranger2.exitCode === null && stranger2.signalCode === null; i++) await Bun.sleep(100);
+if (stranger2.exitCode === null && stranger2.signalCode === null) { stranger2.kill(); fail("adding a repo should take over the session holding it"); }
 u.act("project.delete", { node: "p:held" });
 await u.answer({});
 await u.shows("held deleted", (x) => !x.nodes.some((n: any) => n.id === "p:held"));
