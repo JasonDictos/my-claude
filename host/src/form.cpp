@@ -47,6 +47,7 @@ FormDialog::FormDialog(const QJsonObject& spec, QWidget* parent) : QDialog(paren
     resize(760, 620);
   }
   addFields(form, schema, spec.value("values").toObject(), QString());
+  for (const QString& k : filters_.keys()) refilter(k);
 
   auto* buttons = new QDialogButtonBox(this);
   auto* ok = buttons->addButton(spec.value("ok").toString("OK"), QDialogButtonBox::AcceptRole);
@@ -186,6 +187,12 @@ void FormDialog::addFields(QFormLayout* form, const QJsonObject& schema, const Q
         if (e == cur) cb->setCurrentIndex(i);
         ++i;
       }
+      // format "filter": narrows the list field `filters` to the values "<choice>|…" ("*": all)
+      if (format == "filter") {
+        const QString target = p.value("filters").toString();
+        filters_.insert(target, cb);
+        connect(cb, &QComboBox::currentIndexChanged, this, [this, target] { refilter(target); });
+      }
       f.widget = cb;
     } else if (type == "boolean") {
       auto* c = new QCheckBox(this);
@@ -235,11 +242,40 @@ void FormDialog::addFields(QFormLayout* form, const QJsonObject& schema, const Q
   }
 }
 
-// A picker's choices arriving while the dialog is open: ticks stay, the search still applies.
+// A list field shown filtered by its filter dropdown, if it has one; the selection moves to a
+// shown item.
+void FormDialog::refilter(const QString& key) {
+  QComboBox* cb = filters_.value(key);
+  for (const Field& f : fields_) {
+    auto* lw = qobject_cast<QListWidget*>(f.widget);
+    if (f.key != key || !lw || !cb) continue;
+    const QString want = cb->currentData().toString();
+    for (int k = 0; k < lw->count(); ++k) lw->item(k)->setHidden(want != "*" && !lw->item(k)->data(Qt::UserRole).toString().startsWith(want + "|"));
+    if (!lw->currentItem() || lw->currentItem()->isHidden())
+      for (int k = 0; k < lw->count(); ++k) if (!lw->item(k)->isHidden()) { lw->setCurrentRow(k); break; }
+  }
+}
+
+// A list's choices arriving while the dialog is open: ticks and the selection stay, the
+// search and the filter still apply.
 void FormDialog::setChoices(const QString& key, const QJsonArray& choices, const QJsonArray& labels, const QString& note) {
   for (const Field& f : fields_) {
     auto* lw = qobject_cast<QListWidget*>(f.widget);
-    if (f.key != key || !lw || !lw->property("picker").toBool()) continue;
+    if (f.key != key || !lw) continue;
+    if (!lw->property("picker").toBool()) { // a single-choice list
+      const QString cur = lw->currentItem() ? lw->currentItem()->data(Qt::UserRole).toString() : QString();
+      {
+        const QSignalBlocker hush(lw);
+        lw->clear();
+        for (int i = 0; i < choices.size(); ++i) {
+          auto* it = new QListWidgetItem(i < labels.size() ? labels[i].toString() : choices[i].toString(), lw);
+          it->setData(Qt::UserRole, choices[i].toVariant());
+          if (choices[i].toString() == cur) lw->setCurrentItem(it);
+        }
+      }
+      refilter(key);
+      continue;
+    }
     QSet<QString> ticked;
     for (int k = 0; k < lw->count(); ++k) if (lw->item(k)->checkState() == Qt::Checked) ticked << lw->item(k)->data(Qt::UserRole).toString();
     {
@@ -268,6 +304,9 @@ QJsonValue FormDialog::read(const Field& f) const {
   if (auto* lw = qobject_cast<QListWidget*>(w); lw && lw->property("picker").toBool()) {
     QJsonArray a;
     for (int k = 0; k < lw->count(); ++k) if (lw->item(k)->checkState() == Qt::Checked) a << QJsonValue::fromVariant(lw->item(k)->data(Qt::UserRole));
+    // nothing ticked: the highlighted one, so arrowing to a repo and pressing Enter adds it
+    if (a.isEmpty())
+      for (QListWidgetItem* it : lw->selectedItems()) if (!it->isHidden()) a << QJsonValue::fromVariant(it->data(Qt::UserRole));
     return a;
   }
   if (auto* lw = qobject_cast<QListWidget*>(w)) return lw->currentItem() ? typed(lw->currentItem()->data(Qt::UserRole)) : QJsonValue();

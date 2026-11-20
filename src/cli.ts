@@ -282,6 +282,7 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     }
     case "undelete": {
+      if (rest[0] === "--json") { console.log(JSON.stringify(core.trashed())); return 0; }
       if (rest.length > 1) usage();
       if (!rest.length) {
         const t = core.trashed();

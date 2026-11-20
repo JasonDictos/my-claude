@@ -143,7 +143,7 @@ function words(line: string): string[] | null {
   return out;
 }
 
-const GATED = ["--version", "new", "add", "up", "ls"];
+const GATED = ["--version", "new", "add", "up", "ls", "undelete"];
 // What an allowed key may run, rebuilt from what was asked (never the text itself): the
 // window's driver, the my-claude commands the window runs there, tmux clients for its sessions.
 export function gateArgv(asked: string): string[] | null {

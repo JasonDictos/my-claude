@@ -3,7 +3,7 @@
 // The user in tests/gui.sh: raises what clicks and keys raise (`emit`), answers dialogs, and
 // checks what the window shows and what tmux and the records say.
 import { connect } from "node:net";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const tmp = process.env.E2E_TMP!, bin = process.env.E2E_BIN!, driver = process.env.E2E_DRIVER!;
@@ -251,6 +251,14 @@ if (tmux("list-sessions", "-F", "#{session_name}").includes("second-one")) fail(
 u.act("project.delete", { node: "p:third" });
 await u.answer({});
 await u.shows("third deleted", (x) => x.tabs.join() === "demo" && !x.nodes.some((n: any) => n.id === "p:third"));
+// and Undelete brings it back (its choices are "<machine>|<trash dir>", "." being this one)
+u.act("app.undelete");
+{
+  const dir = readdirSync(join(root, ".trash")).find((d) => d.endsWith("-third"));
+  if (!dir) fail("third should be in the trash", readdirSync(join(root, ".trash")));
+  await u.answer({ which: `.|${dir}` });
+}
+await u.shows("third undeleted", (x) => x.nodes.some((n: any) => n.id === "p:third"), 20000);
 
 // --- a repo whose conversation is open in a Claude started by hand: starting the project
 // asks to take it over, and taking over moves it into the window

@@ -25,6 +25,11 @@ wait_log() { for _ in $(seq 75); do [ "$(lines)" -ge "$1" ] && return; sleep 0.2
 
 mc new smoke --goal "test goal" >/dev/null
 for i in 1 2 3 4; do mc add smoke "$tmp/r$i" >/dev/null; done
+# a folder belongs to one project: a second one cannot take it (two Claudes on one conversation)
+mc new twin >/dev/null
+out=$(mc add twin "$tmp/r1" 2>&1) && fail "a second project took r1: $out"
+echo "$out" | grep -q "already r1 in project smoke" || fail "the refusal should name the project: $out"
+mc delete twin >/dev/null
 [ "$(mc status smoke --json | jq -r .lead)" = null ] || fail "nobody leads by default"
 mc up smoke --no-attach >/dev/null
 wait_log 4

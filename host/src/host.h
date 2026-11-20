@@ -255,6 +255,7 @@ private:
   bool copyOnSelect_ = true;
   bool dropdown_ = false; // Guake style: full screen, hidden on focus loss, summoned by the key
   void showAsSet();
+  void reattachDialogs();
   qint64 scrollbackCap_ = 20LL << 30;     // bytes on disk before the largest history is dropped
   QProcessEnvironment childEnv() const;
   TmuxControl* controlFor(const QString& session);

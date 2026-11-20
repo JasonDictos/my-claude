@@ -121,6 +121,19 @@ export async function indexAll(name: string, wait = false): Promise<string[]> {
   return (await Promise.all(load(name).peers.map((x) => index(name, x.repo, wait)))).filter((x): x is string => !!x);
 }
 
+// The project that already has `path` as a peer (another than `except`): on one machine a
+// folder belongs to one project, or two Claudes would carry on its conversation at once.
+export function ownerOf(path: string, except: string): { project: string; repo: string } | null {
+  for (const q of listProjects()) {
+    if (q.name === except) continue;
+    const hit = q.peers.find((x) => x.path === path);
+    if (hit) return { project: q.name, repo: hit.repo };
+  }
+  return null;
+}
+const ownedMsg = (path: string, o: { project: string; repo: string }) =>
+  `${path.replace(homedir(), "~")} is already ${o.repo} in project ${o.project}; a folder belongs to one project (two would share its conversation)`;
+
 export async function addPeer(name: string, path: string, o: { role?: Role; model?: string | null; repo?: string; origin?: string; branch?: string; takeover?: boolean } = {}): Promise<Peer> {
   const p = load(name);
   let real: string;
@@ -134,6 +147,7 @@ export async function addPeer(name: string, path: string, o: { role?: Role; mode
   if (!NAME_RE.test(repo)) die(`bad peer name '${repo}'`);
   if (p.peers.some((x) => x.repo === repo)) die(`peer '${repo}' already in ${name}`);
   if (p.peers.some((x) => x.path === real)) die(`${real} already in ${name}`);
+  { const o = ownerOf(real, name); if (o) die(ownedMsg(real, o)); }
   // Nobody leads until the user says so (setLead); an explicit lead demotes the old one.
   const role: Role = o.role ?? "peer";
   if (role === "lead") {
@@ -507,6 +521,7 @@ export async function readd(name: string, repo: string, log?: (s: string) => voi
   const r = (p.removed ?? []).find((x) => x.repo === repo);
   if (!r) die(`${repo} was not removed from ${name} (have: ${(p.removed ?? []).map((x) => x.repo).join(", ") || "none"})`);
   if (p.peers.some((x) => x.repo === repo)) die(`peer '${repo}' already in ${name}`);
+  { const o = ownerOf(r.path, name); if (o) die(ownedMsg(r.path, o)); }
   if (!existsSync(r.path)) {
     if (!r.origin) die(`${r.path} is gone and ${repo} has no origin to clone from`);
     log?.(`cloning ${r.origin}${r.branch ? "#" + r.branch : ""} -> ${r.path}...`);
@@ -530,7 +545,12 @@ export async function readd(name: string, repo: string, log?: (s: string) => voi
 export async function undelete(which: string, log?: (s: string) => void): Promise<{ name: string; recloned: string[]; missing: string[] }> {
   const p = restore(which);
   const recloned: string[] = [], missing: string[] = [];
-  for (const peer of p.peers) {
+  const taken = p.peers.filter((x) => ownerOf(x.path, p.name));
+  if (taken.length) {
+    for (const x of taken) missing.push(`${x.repo} (left out: ${ownedMsg(x.path, ownerOf(x.path, p.name)!)})`);
+    save({ ...p, peers: p.peers.filter((x) => !taken.includes(x)), removed: [...(p.removed ?? []), ...taken.map((x) => ({ ...x, when: Date.now() }))] });
+  }
+  for (const peer of p.peers.filter((x) => !taken.includes(x))) {
     if (existsSync(peer.path)) continue;
     if (peer.origin && peer.path.startsWith(join(PROJECTS, p.name) + "/")) {
       log?.(`cloning ${peer.origin}${peer.branch ? "#" + peer.branch : ""} -> ${peer.path}...`);
@@ -639,11 +659,12 @@ export async function up(name: string, o: { takeover?: boolean } = {}): Promise<
   const p = load(name);
   if (p.peers.length === 0) die(`${name} has no peers (my-claude add)`);
   profile(p.profile);
-  if (!p.running) save({ ...p, running: true });
   const report: UpReport[] = [];
   for (const peer of p.peers) {
     const st = await peerState(p, peer);
-    if (st === "live" || st === "starting") report.push({ repo: peer.repo, action: st });
+    const owner = st === "live" || st === "starting" ? null : ownerOf(peer.path, p.name);
+    if (owner) report.push({ repo: peer.repo, action: "skipped", detail: ownedMsg(peer.path, owner) });
+    else if (st === "live" || st === "starting") report.push({ repo: peer.repo, action: st });
     else if (st === "idle") {
       await relaunchInPane(p, peer, (await tmux.paneOf(name, peer.repo))!);
       report.push({ repo: peer.repo, action: "relaunched" });
@@ -653,16 +674,17 @@ export async function up(name: string, o: { takeover?: boolean } = {}): Promise<
       report.push({ repo: peer.repo, action: "launched", detail: "taken over" });
     } else if (st === "occupied") {
       const lock = lockInfo(peer.path);
-      report.push({ repo: peer.repo, action: "skipped", detail: `pid ${occupantPid(peer.path)}${lock?.started ? `, since ${String(lock.started).slice(11, 16)}` : ""}` });
+      report.push({ repo: peer.repo, action: "skipped", detail: `its conversation is open in a Claude started outside my-claude (pid ${occupantPid(peer.path)}${lock?.started ? `, since ${String(lock.started).slice(11, 16)}` : ""}); to move it here: my-claude up ${name} --takeover` });
     } else {
       await spawn(p, peer);
       report.push({ repo: peer.repo, action: "launched" });
     }
   }
   if (!await tmux.sessionUp(name)) {
-    const held = report.filter((r) => r.action === "skipped");
-    die(held.map((r) => `${r.repo}: its conversation is open in a Claude started outside my-claude (${r.detail}); to move it here: my-claude up ${name} --takeover`).join("\n") || "nothing launched");
+    die(report.filter((r) => r.action === "skipped").map((r) => `${r.repo}: ${r.detail}`).join("\n") || "nothing launched");
   }
+  // running (the daemon brings it back) only once something does run
+  if (!load(name).running) save({ ...load(name), running: true });
   // Panes for repos that are no longer peers (removed while the session was down, or
   // a record edited by hand): my-claude made them, my-claude closes them.
   for (const s of await strayPanes(p)) {

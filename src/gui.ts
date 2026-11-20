@@ -14,7 +14,7 @@ import { profile, profiles } from "./profiles/index.ts";
 import { REMOTE_PATH } from "./remote.ts";
 import { lockInfo, occupantPid } from "./live.ts";
 import type { ProfileAction } from "./profiles/types.ts";
-import { PROJECTS, ROOT, UsageError, config, daemonSettings, defaultProfile, saveConfig, slug } from "./store.ts";
+import { PROJECTS, ROOT, UsageError, config, daemonSettings, defaultProfile, saveConfig, slug, type Trashed } from "./store.ts";
 import { out, sh, shOk } from "./sh.ts";
 
 type Dict = Record<string, any>;
@@ -902,7 +902,7 @@ class Driver {
       await this.work(name, `starting ${name}…`, async () => {
         await core.ensureBinary();
         for (const repo of taken) await core.takeover(name, repo);
-        for (const r of await core.up(name)) if (r.action === "skipped") this.notify(`${r.repo}: left in the session that has it (${r.detail})`);
+        for (const r of await core.up(name)) if (r.action === "skipped") this.notify(`${r.repo}: ${r.detail}`);
         await core.syncGroupNow(name);
       });
     }
@@ -1130,14 +1130,45 @@ class Driver {
     });
   }
 
+  // Every machine's trash in one list, filtered by machine: this machine's at once, the
+  // others' filled in as they answer. A project is restored where it was deleted.
   private async undelete(): Promise<void> {
-    const t = core.trashed();
-    if (!t.length) return this.notify("nothing in the trash");
-    const v = await this.ask({ title: "Undelete a project", ok: "Restore", schema: { type: "object", properties: { which: { type: "string", title: "Project", format: "list", enum: t.map((x) => x.dir), enumLabels: t.map((x) => `${x.name}   (${x.peers.join(", ") || "no repos"})   ${new Date(x.when).toLocaleString()}`) } } } });
+    const hosts = (config().gui?.hosts ?? {}) as Record<string, { dest?: string; port?: number; key?: string; jump?: string }>;
+    const names = Object.keys(hosts).sort();
+    const here = hostname().split(".")[0];
+    type Row = { m: string; t: Trashed };
+    let rows: Row[] = core.trashed().map((t) => ({ m: ".", t }));
+    if (!rows.length && !names.length) return this.notify("nothing in the trash");
+    const choices = () => {
+      const all = [...rows].sort((a, b) => b.t.when - a.t.when);
+      return { enum: all.map((r) => `${r.m}|${r.t.dir}`),
+        enumLabels: all.map((r) => `${r.t.name}@${r.m === "." ? here : r.m}   (${r.t.peers.join(", ") || "no repos"})   ${new Date(r.t.when).toLocaleString()}`) };
+    };
+    const id = `ask-${++this.askSeq}`;
+    const answer = this.ask({ title: "Undelete a project", ok: "Restore", schema: { type: "object", order: ["machine", "which"], properties: {
+      ...(names.length ? { machine: { type: "string", title: "Machine", format: "filter", filters: "which", enum: ["*", ".", ...names],
+        enumLabels: ["every machine", `this machine (${here})`, ...names] } } : {}),
+      which: { type: "string", title: "Project", format: "list", ...choices() } } } }, id);
+    for (const n of names) {
+      void this.onMachine(hosts[n], ["undelete", "--json"], 20_000).then((r) => {
+        try { if (r.ok) rows = [...rows, ...(JSON.parse(r.out.split("\n").pop() || "[]") as Trashed[]).map((t) => ({ m: n, t }))]; } catch {}
+      }).finally(() => this.send({ op: "fill", id, key: "which", ...choices() }));
+    }
+    const v = await answer;
     if (!v?.which) return;
-    await this.work("*trash", "restoring…", async () => {
-      const r = await core.undelete(String(v.which), (m) => this.progress("*trash", m));
-      this.notify(`restored ${r.name}${r.recloned.length ? `; cloned again: ${r.recloned.join(", ")}` : ""}${r.missing.length ? `; missing: ${r.missing.join(", ")}` : ""}`, { error: r.missing.length > 0 });
+    const [m, dir] = [String(v.which).split("|")[0], String(v.which).split("|").slice(1).join("|")];
+    if (m === ".") {
+      await this.work("*trash", "restoring…", async () => {
+        const r = await core.undelete(dir, (msg) => this.progress("*trash", msg));
+        this.notify(`restored ${r.name}${r.recloned.length ? `; cloned again: ${r.recloned.join(", ")}` : ""}${r.missing.length ? `; missing: ${r.missing.join(", ")}` : ""}`, { error: r.missing.length > 0 });
+      });
+      return;
+    }
+    await this.work("*trash", `restoring on ${m}…`, async () => {
+      const r = await this.onMachine(hosts[m], ["undelete", dir]);
+      if (!r.ok) throw new Error(`${m}: ${r.out.split("\n").pop()}`);
+      this.connectMachine(m, hosts[m]);
+      this.notify(`${m}: ${r.out.split("\n").filter(Boolean).pop() ?? "restored"}`);
     });
   }
 

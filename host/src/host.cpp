@@ -552,6 +552,7 @@ void Host::handle(const QJsonObject& m, QLocalSocket* from) {
   }
   if (op == "toggle") {
     // drop-down style: up front and full screen, or out of the way
+    if (!asks_.isEmpty() && isVisible()) { reattachDialogs(); return; } // a question is open: it comes forward
     if (!m.value("show").toBool() && isVisible() && isActiveWindow() && !(windowState() & Qt::WindowMinimized)) { hide(); return; }
     showInFront();
     return;
@@ -2226,6 +2227,7 @@ void Host::registerGlobalKey() {
 
 void Host::onGlobalShortcut(const QString& component, const QString& shortcut, qlonglong) {
   if (component != "mc-term" || shortcut != "toggle") return;
+  if (!asks_.isEmpty() && isVisible()) { reattachDialogs(); return; } // a question is open: it comes forward
   if (isVisible() && isActiveWindow() && !(windowState() & Qt::WindowMinimized)) { hide(); return; }
   showInFront();
 }
@@ -2239,11 +2241,24 @@ void Host::revealFirst() {
   showAsSet();
 }
 
-// Full screen in dropdown mode, otherwise as it was (not minimised).
+// Full screen in dropdown mode, otherwise as it was (not minimised); its open dialogs on top.
 void Host::showAsSet() {
-  if (dropdown_) { showFullScreen(); return; }
-  show();
-  setWindowState(windowState() & ~Qt::WindowMinimized);
+  const bool fresh = !isVisible(); // a new surface: its dialogs need attaching again
+  if (dropdown_) showFullScreen();
+  else { show(); setWindowState(windowState() & ~Qt::WindowMinimized); }
+  if (fresh && !asks_.isEmpty()) QTimer::singleShot(0, this, &Host::reattachDialogs);
+}
+
+// A window shown anew (Wayland gives it a new surface) leaves its open dialogs without a
+// parent: still modal, but free to fall behind it. Shown again, each is its child once more.
+void Host::reattachDialogs() {
+  for (FormDialog* d : asks_) {
+    if (!d) continue;
+    if (d->isVisible()) d->hide();
+    d->show();
+    d->raise();
+    d->activateWindow();
+  }
 }
 
 void Host::showInFront() {
