@@ -43,6 +43,8 @@
 #include <QTest>
 #include <QStyledItemDelegate>
 #include <QLineEdit>
+#include <QToolBar>
+#include <QFile>
 #include <QSysInfo>
 #include <functional>
 #include <QThread>
@@ -302,7 +304,23 @@ Host::Host(const QString& socketPath, const QString& driverCmd, QWidget* parent)
   tree_->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
   tree_->setContextMenuPolicy(Qt::CustomContextMenu);
   tree_->installEventFilter(this);
-  dock_->setWidget(tree_);
+  {
+    // a dense bar of the common operations over the list (View → Toolbar, or the caption's menu)
+    auto* side = new QWidget(dock_);
+    auto* col = new QVBoxLayout(side);
+    col->setContentsMargins(0, 0, 0, 0);
+    col->setSpacing(0);
+    toolbar_ = new QToolBar(side);
+    toolbar_->setObjectName("sidebarTools");
+    toolbar_->setIconSize(QSize(18, 18));
+    toolbar_->setMovable(false);
+    toolbar_->setFloatable(false);
+    toolbar_->setContextMenuPolicy(Qt::PreventContextMenu);
+    toolbar_->setAttribute(Qt::WA_StyledBackground); // solid, also when the window is see-through
+    col->addWidget(toolbar_);
+    col->addWidget(tree_, 1);
+    dock_->setWidget(side);
+  }
   addDockWidget(Qt::LeftDockWidgetArea, dock_);
   connect(tree_, &QTreeWidget::itemClicked, this, [this](QTreeWidgetItem* it, int) {
     emitEvent({{"ev", "select"}, {"node", it->data(0, Qt::UserRole).toString()}});
@@ -355,6 +373,7 @@ Host::Host(const QString& socketPath, const QString& driverCmd, QWidget* parent)
     restoreState(st.value("state").toByteArray());
     fontSize_ = st.value("fontSize", fontSize_).toInt();
     menuPersist_ = st.value("menuPersist", true).toBool();
+    toolbar_->setVisible(st.value("toolbar", true).toBool());
     if (!menuPersist_) QTimer::singleShot(0, this, [this] { menuBar()->hide(); });
   }
   // Unlimited scrollback is file-backed, and the files go where TMPDIR says. /tmp is RAM
@@ -746,6 +765,18 @@ void Host::handle(const QJsonObject& m, QLocalSocket* from) {
   if (op == "sidebar") { if (m.contains("select")) selectNode(m.value("select").toString()); else sidebarFocus(); return; }
   if (op == "menu") { setMenus(m.value("menus").toArray()); return; }
   if (op == "ask") { ask(m); return; }
+  if (op == "toolbar") { // its buttons: {id, label, icon}, fired like the menus' items
+    toolbar_->clear();
+    for (const auto& v : m.value("items").toArray()) {
+      const QJsonObject it = v.toObject();
+      if (it.value("separator").toBool()) { toolbar_->addSeparator(); continue; }
+      const QString aid = it.value("id").toString();
+      QAction* a = toolbar_->addAction(toolIcon(it.value("icon").toString()), it.value("label").toString());
+      a->setToolTip(it.value("label").toString());
+      connect(a, &QAction::triggered, this, [this, aid] { runAction(aid); });
+    }
+    return;
+  }
   if (op == "edit") { // rename an entry in place, as F2 does
     if (QTreeWidgetItem* it = nodeItems_.value(m.value("node").toString())) { tree_->setCurrentItem(it); tree_->setFocus(); tree_->editItem(it, 0); }
     return;
@@ -2018,6 +2049,25 @@ void Host::setTree(const QJsonArray& nodes) {
   if (hadFocus) tree_->setFocus();
 }
 
+// A toolbar icon: host/icons/tb-<name>.svg when there is one, else the desktop theme's, else Qt's.
+QIcon Host::toolIcon(const QString& name) const {
+  if (QFile::exists(":/tb-" + name + ".svg")) return QIcon(":/tb-" + name + ".svg");
+  if (name == "shell") return QIcon(":/console-docker.svg");
+  if (name == "host-shell") return QIcon(":/console.svg");
+  static const QHash<QString, QPair<QString, QStyle::StandardPixmap>> theme{
+    {"new-project", {"folder-new", QStyle::SP_FileDialogNewFolder}}, {"add-repos", {"list-add", QStyle::SP_DirOpenIcon}},
+    {"chat", {"dialog-messages", QStyle::SP_MessageBoxInformation}}, {"connect", {"network-connect", QStyle::SP_DriveNetIcon}},
+    {"undelete", {"edit-undo", QStyle::SP_TrashIcon}}, {"settings", {"configure", QStyle::SP_FileDialogDetailedView}},
+    {"start", {"media-playback-start", QStyle::SP_MediaPlay}}, {"stop", {"media-playback-stop", QStyle::SP_MediaStop}}};
+  const auto it = theme.constFind(name);
+  return it == theme.constEnd() ? QIcon() : QIcon::fromTheme(it->first, style()->standardIcon(it->second));
+}
+
+void Host::showToolbar(bool on) {
+  toolbar_->setVisible(on);
+  if (statePersisted()) QSettings("my-claude", "mc-term").setValue("toolbar", on);
+}
+
 // The terminal a list entry stands for: a shell's own, or the pane a peer's entry marks.
 QString Host::termOfNode(const QString& node) const {
   if (node.startsWith("t:") && terms_.contains(node.mid(2))) return node.mid(2);
@@ -2278,6 +2328,7 @@ void Host::local(const QString& a) {
   else if (a == "host.font-bigger") { ++fontSize_; applyFont(); }
   else if (a == "host.font-smaller") { fontSize_ = qMax(6, fontSize_ - 1); applyFont(); }
   else if (a == "host.font-reset") { fontSize_ = baseFontSize_; applyFont(); }
+  else if (a == "host.toolbar") showToolbar(!toolbar_->isVisible());
   else if (a == "host.fullscreen") { if (!dropdown_) setWindowState(windowState() ^ Qt::WindowFullScreen); } // dropdown mode is always full screen
   else if (a == "host.settings") openSettings();
   else if (a == "host.driver-restart") {
@@ -2583,6 +2634,10 @@ QMenu* Host::createPopupMenu() {
   a->setChecked(menuPersist_);
   a->setToolTip("Off: the menu bar stays hidden; hold Alt to bring it up");
   connect(a, &QAction::toggled, this, [this](bool on) { setMenuPersist(on); });
+  QAction* t = m->addAction("Toolbar");
+  t->setCheckable(true);
+  t->setChecked(toolbar_->isVisible());
+  connect(t, &QAction::toggled, this, [this](bool on) { showToolbar(on); });
   return m;
 }
 

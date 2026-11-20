@@ -287,6 +287,9 @@ private:
   QTimer* previewTimer_ = nullptr;
   QString previewId_;
   QString termOfNode(const QString& node) const;
+  class QToolBar* toolbar_ = nullptr; // the operations over the list
+  QIcon toolIcon(const QString& name) const;
+  void showToolbar(bool on);
   void showPreview(class QTreeWidgetItem* it);
   void refreshPreview();
   void hidePreview();

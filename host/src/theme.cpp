@@ -70,6 +70,11 @@ void theme::applyChrome(QApplication& app) {
 QDialog { background: @window; }
 QWidget#strip { background: @panel; border-top: 1px solid @line; }
 QMenuBar { background: @panel; color: #b9bfcc; border-bottom: 1px solid @line; padding: 1px 4px; }
+QToolBar#sidebarTools { background: @panel; border: 0; border-bottom: 1px solid @line; padding: 2px 4px; spacing: 2px; }
+QToolBar#sidebarTools QToolButton { background: transparent; border: 0; border-radius: 4px; padding: 3px; }
+QToolBar#sidebarTools QToolButton:hover { background: @raised; }
+QToolBar#sidebarTools QToolButton:pressed { background: @selected; }
+QToolBar#sidebarTools::separator { background: @line; width: 1px; margin: 4px 3px; }
 QMenuBar::item { padding: 4px 10px; background: transparent; border-radius: 4px; }
 QMenuBar::item:selected, QMenuBar::item:pressed { background: @raised; color: @text; }
 QMenu { background: @panel; color: @text; border: 1px solid @line; padding: 4px; }

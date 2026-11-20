@@ -453,6 +453,15 @@ class Driver {
 
     this.sendIfChanged("tree", { op: "tree", nodes: snaps.map((s) => this.projectNode(s)) });
     this.sendIfChanged("menu", { op: "menu", menus: this.menus() });
+    // the dense bar over the list: icons by name (host/icons/tb-<icon>.svg when there is one)
+    const sep = { separator: true };
+    this.sendIfChanged("toolbar", { op: "toolbar", items: [
+      { id: "app.new", label: "New project", icon: "new-project" }, { id: "project.add", label: "Add repos to the project", icon: "add-repos" }, sep,
+      { id: "project.open", label: "Start the project", icon: "start" }, { id: "project.down", label: "Bring the project down", icon: "stop" }, sep,
+      { id: "pane.shell", label: "Shell in its environment (container)", icon: "shell" }, { id: "pane.hostshell", label: "Host shell in its checkout", icon: "host-shell" },
+      { id: "pane.chat", label: "Chat with the peers", icon: "chat" }, sep,
+      { id: "app.quickconnect", label: "Connect a machine", icon: "connect" }, { id: "app.undelete", label: "Undelete a project", icon: "undelete" },
+      { id: "host.settings", label: "Settings", icon: "settings" }] });
     this.sendIfChanged("settings", { op: "settings", ...this.settingsSpec() });
     this.sendIfChanged("placeholder", { op: "placeholder", text: snaps.length ? "No project open.\n\nPick one in the Projects list (Enter or a double-click starts it),\nor my-claude → New project." : "No projects yet.\n\nmy-claude → New project  (or press n in the Projects list)" });
     this.alerts(snaps);
@@ -653,7 +662,7 @@ class Driver {
         item("host.paste", "Paste", ["Ctrl+Shift+V"]), item("host.copy", "Copy the selection", ["Ctrl+Shift+C"]),
         item("host.find", "Find in scrollback…", ["Ctrl+Shift+F"]), item("host.scroll-end", "Scroll to the end", ["Ctrl+Shift+End"]), item("host.clear-scrollback", "Clear scrollback")] },
       { title: "&View", items: [
-        item("host.sidebar-toggle", "Show/hide the projects sidebar", ["Ctrl+H"]), item("host.fullscreen", "Full screen", ["F11"]), sep,
+        item("host.sidebar-toggle", "Show/hide the projects sidebar", ["Ctrl+H"]), item("host.toolbar", "Toolbar over the list"), item("host.fullscreen", "Full screen", ["F11"]), sep,
         item("host.pane-text-bigger", "This pane: bigger text", ["Ctrl+=", "Ctrl++"]), item("host.pane-text-smaller", "This pane: smaller text", ["Ctrl+-"]),
         item("host.pane-text-reset", "This pane: normal text size", ["Ctrl+0"]), sep,
         item("host.font-bigger", "All panes: bigger text", ["Ctrl+Shift+="]), item("host.font-smaller", "All panes: smaller text", ["Ctrl+Shift+-"]), item("host.font-reset", "All panes: normal text size", ["Ctrl+Shift+0"])] },
