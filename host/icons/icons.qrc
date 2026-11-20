@@ -4,4 +4,6 @@
     <file>mc-term-32.png</file>
     <file>mc-term-16.png</file>
     <file>close.svg</file>
-    <file>close-hover.svg</file></qresource></RCC>
+    <file>close-hover.svg</file>
+    <file>console.svg</file>
+    <file>console-docker.svg</file></qresource></RCC>

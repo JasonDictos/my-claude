@@ -21,12 +21,12 @@ mc a new near >/dev/null; mc a add near "$tmp/r1" >/dev/null; mc a up near --no-
 mc b new far >/dev/null; mc b add far "$tmp/r2" "$tmp/r3" >/dev/null; mc b up far --no-attach >/dev/null
 # the window, this machine's driver
 TMUX_TMPDIR=$tmp/a MY_CLAUDE_ROOT=$tmp/a/root MY_CLAUDE_CONFIG_DIR=$tmp/a/cfg "$bin" --socket "$tmp/win.sock" --driver "bun $here/../src/cli.ts _gui" 2> "$tmp/win.err" & echo $! > "$tmp/win.pid"
-export WIN=$tmp/win.sock FAR_DRIVER="$here/fake-ssh far env TMUX_TMPDIR=$tmp/b MY_CLAUDE_ROOT=$tmp/b/root MY_CLAUDE_CONFIG_DIR=$tmp/b/cfg MY_CLAUDE_CLAUDE=$MY_CLAUDE_CLAUDE FAKE_CLAUDE_LOG=$FAKE_CLAUDE_LOG MY_CLAUDE_NO_SHELL_ENV=1 bun $here/../src/cli.ts _gui --stdio" FAR_TMUX="$here/fake-ssh far env TMUX_TMPDIR=$tmp/b tmux"
+export B=$tmp CLI=$here/../src/cli.ts WIN=$tmp/win.sock FAR_DRIVER="$here/fake-ssh far env TMUX_TMPDIR=$tmp/b MY_CLAUDE_ROOT=$tmp/b/root MY_CLAUDE_CONFIG_DIR=$tmp/b/cfg MY_CLAUDE_CLAUDE=$MY_CLAUDE_CLAUDE FAKE_CLAUDE_LOG=$FAKE_CLAUDE_LOG MY_CLAUDE_NO_SHELL_ENV=1 bun $here/../src/cli.ts _gui --stdio" FAR_TMUX="$here/fake-ssh far env TMUX_TMPDIR=$tmp/b tmux"
 bun -e '
 import { connect } from "node:net";
 const env = process.env;
 const fail = (m, x) => { console.log("FAIL:", m, JSON.stringify(x ?? "", null, 1)); process.exit(1); };
-setTimeout(() => fail("timeout"), 90000);
+setTimeout(() => fail("timeout"), 180000);
 for (let i = 0; i < 100 && !(await Bun.file(env.WIN).exists()); i++) await Bun.sleep(50);
 const c = connect(env.WIN); let buf = "", got = [];
 c.on("data", (d) => { buf += d; for (let nl = buf.indexOf("\n"); nl >= 0; nl = buf.indexOf("\n")) { got.push(JSON.parse(buf.slice(0, nl))); buf = buf.slice(nl + 1); } });
@@ -42,6 +42,12 @@ const l = await shows("the far project as far@far, its panes live, next to near"
 // the far machine is a section of its own ("PROJECTS @ far"), its project under it
 if (!l.nodes.some((n) => n.id === "m:far" && n.label === "PROJECTS @ far") || !l.nodes.some((n) => n.id === "p:far@far" && n.label === "far")) fail("the tree should have a far section with the far project", l.nodes);
 // typing into a far pane reaches the far tmux
+// a dialog from the far driver is answered back to it: delete a project there
+Bun.spawnSync(["bun", env.CLI, "new", "spare"], { env: { ...env, TMUX_TMPDIR: env.B + "/b", MY_CLAUDE_ROOT: env.B + "/b/root", MY_CLAUDE_CONFIG_DIR: env.B + "/b/cfg" } });
+await shows("spare@far in the list", (x) => x.nodes.some((n) => n.id === "p:spare@far"));
+send({ op: "emit", event: { ev: "action", action: "project.delete", node: "p:spare@far" } });
+{ const a = await shows("the delete question from far", (x) => x.asks.length > 0, 15000); send({ op: "answer", id: a.asks[0], values: {} }); }
+await shows("spare deleted on far", (x) => !x.nodes.some((n) => n.id === "p:spare@far"), 20000);
 const fp = l.terminals.find((t) => t.tab === "far@far");
 send({ op: "send", id: fp.id, text: "typed-far" });
 for (let i = 0; ; i++) { send({ op: "screen", id: fp.id }); await Bun.sleep(150); const s = got.filter((x) => x.ev === "screen" && x.id === fp.id).pop(); if (s && s.text.includes("typed-far")) break; if (i > 60) fail("typing into the far pane", s); }

@@ -462,13 +462,18 @@ async function floatingPanes(): Promise<boolean> {
 
 // Every pane of the project, floats included: peers titled by repo, shells and the chat by
 // their `role` tag.
-export interface PaneRow { id: string; title: string; role: string; window: string; windowIndex: number; winActive: boolean; active: boolean; last: boolean; start: number; floating: boolean; width: number; height: number }
+export interface PaneRow { id: string; title: string; role: string; name: string; window: string; windowIndex: number; winActive: boolean; active: boolean; last: boolean; start: number; floating: boolean; width: number; height: number }
 export async function panes(name: string): Promise<PaneRow[]> {
-  const lines = await sh("tmux", ["list-panes", "-s", "-t", `=${sess(name)}`, "-F", "#{pane_floating_flag}\t#{pane_id}\t#{window_id}\t#{window_index}\t#{window_active}\t#{pane_active}\t#{pane_last}\t#{pane_start_time}\t#{pane_width}\t#{pane_height}\t#{@mc_role}\t#{pane_title}"], { ok: true });
+  const lines = await sh("tmux", ["list-panes", "-s", "-t", `=${sess(name)}`, "-F", "#{pane_floating_flag}\t#{pane_id}\t#{window_id}\t#{window_index}\t#{window_active}\t#{pane_active}\t#{pane_last}\t#{pane_start_time}\t#{pane_width}\t#{pane_height}\t#{@mc_name}\t#{@mc_role}\t#{pane_title}"], { ok: true });
   return lines.split("\n").filter(Boolean).map((l) => {
-    const [fl, id, win, wi, wa, pa, pl, st, w, h, role, ...t] = l.split("\t");
-    return { id, title: t.join("\t"), role: role ?? "", window: win, windowIndex: Number(wi), winActive: wa === "1", active: pa === "1", last: pl === "1", start: Number(st || 0), floating: fl === "1", width: Number(w), height: Number(h) };
+    const [fl, id, win, wi, wa, pa, pl, st, w, h, nm, role, ...t] = l.split("\t");
+    return { id, title: t.join("\t"), role: role ?? "", name: nm ?? "", window: win, windowIndex: Number(wi), winActive: wa === "1", active: pa === "1", last: pl === "1", start: Number(st || 0), floating: fl === "1", width: Number(w), height: Number(h) };
   });
+}
+
+// A pane's name in the window, given by the user (empty: back to the default).
+export async function renamePane(pane: string, label: string): Promise<void> {
+  await sh("tmux", ["set-option", "-p", ...(label ? [] : ["-u"]), "-t", pane, "@mc_name", ...(label ? [label] : [])], { ok: true });
 }
 
 // What a pane is called: its tag when it has one, else its title.

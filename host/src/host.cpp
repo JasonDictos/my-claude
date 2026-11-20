@@ -73,6 +73,14 @@ void endProcess(QProcess* p, int graceMs) {
 
 const char* kPlaceholder = "No project open.\n\nPick one in the Projects list (Enter or double-click starts it),\nor use my-claude → New project.";
 
+// A sidebar entry's kind: "terminal" (a peer or shell on the host) or "container" (inside a
+// container, docker).
+QIcon kindIcon(const QString& kind) {
+  if (kind == "terminal") return QIcon(":/console.svg");
+  if (kind == "container") return QIcon(":/console-docker.svg");
+  return QIcon();
+}
+
 // The state mark in front of a sidebar entry: a filled dot, a half, a ring or a bang.
 QIcon dotIcon(const QString& shape, const QColor& color) {
   if (shape.isEmpty() || shape == "none") return QIcon();
@@ -143,7 +151,7 @@ QString tagOf(const QString& s) {
   const int at = project.lastIndexOf('@');
   return at < 0 ? QString() : project.mid(at + 1);
 }
-const int kHostRole = Qt::UserRole + 2, kSectionRole = Qt::UserRole + 3;
+const int kHostRole = Qt::UserRole + 2, kSectionRole = Qt::UserRole + 3, kKindRole = Qt::UserRole + 4;
 
 // Another machine's section row, like the caption: "PROJECTS @ " small and grey, the host bold white.
 class SectionDelegate : public QStyledItemDelegate {
@@ -287,7 +295,9 @@ Host::Host(const QString& socketPath, const QString& driverCmd, QWidget* parent)
     // one machine's section always stays open
     if (it->data(0, kSectionRole).toBool() && openSections() == 0) QTimer::singleShot(0, this, [this, it] { if (nodeItems_.values().contains(it)) it->setExpanded(true); });
   });
-  connect(tree_, &QTreeWidget::itemExpanded, this, [this](QTreeWidgetItem* it) { collapsed_.remove(it->data(0, Qt::UserRole).toString()); });
+  connect(tree_, &QTreeWidget::itemExpanded, this, [this](QTreeWidgetItem* it) {
+    collapsed_.remove(it->data(0, Qt::UserRole).toString());
+  });
   connect(tree_, &QTreeWidget::customContextMenuRequested, this, [this](const QPoint& p) {
     if (QTreeWidgetItem* it = tree_->itemAt(p)) showNodeMenu(it->data(0, Qt::UserRole).toString(), tree_->viewport()->mapToGlobal(p), QString());
   });
@@ -358,13 +368,14 @@ Host::Host(const QString& socketPath, const QString& driverCmd, QWidget* parent)
   altTimer_ = new QTimer(this);
   altTimer_->setSingleShot(true);
   altTimer_->setInterval(qEnvironmentVariableIntValue("MC_TERM_ALT_HOLD_MS") > 0 ? qEnvironmentVariableIntValue("MC_TERM_ALT_HOLD_MS") : 350);
-  connect(altTimer_, &QTimer::timeout, this, [this] { if (!menuPersist_) { menuHide_->stop(); menuBar()->show(); } });
+  connect(altTimer_, &QTimer::timeout, this, [this] { if (!menuPersist_) { menuHover_ = false; menuBar()->show(); menuHide_->start(); } });
   menuHide_ = new QTimer(this);
   menuHide_->setSingleShot(true);
   menuHide_->setInterval(4000);
+  // shown by Alt, it goes again once the mouse has been still a while, not on it, no menu open
   connect(menuHide_, &QTimer::timeout, this, [this] {
     if (menuPersist_) return;
-    if (menuBar()->activeAction()) { menuHide_->start(); return; } // a menu is open: later
+    if (menuBar()->activeAction() || (menuHover_ && menuBar()->underMouse())) { menuHide_->start(); return; }
     menuBar()->hide();
   });
   keyBarTimer_ = new QTimer(this);
@@ -517,8 +528,11 @@ void Host::onReadyRead(QLocalSocket* s) {
       if (op == "busy") { if (!msg.value("text").toString().isEmpty()) statusBar()->showMessage(tag + ": " + msg.value("text").toString(), 5000); continue; }
       if (op == "notify") { QJsonObject n = msg; n["text"] = tag + ": " + msg.value("text").toString(); handle(n, s); continue; }
       if (windowOwn.contains(op)) continue;
+      // a dialog's id is the driver's own plus "#machine" (not tagged like a pane's, or the
+      // answer would come back under a name the driver never gave it)
+      const QString askId = msg.value("id").toString();
       msg = tagIn(msg, tag);
-      if (op == "ask" || op == "fill") msg["id"] = msg.value("id").toString() + "#" + tag;
+      if (op == "ask" || op == "fill") msg["id"] = askId + "#" + tag;
     }
     handle(msg, s);
     if (!clients_.contains(s)) return; // a request may end the connection
@@ -1948,6 +1962,7 @@ void Host::setTree(const QJsonArray& nodes) {
     it->setText(0, n.value("label").toString());
     if (n.contains("section")) { it->setData(0, kSectionRole, true); it->setData(0, kHostRole, n.value("section").toString()); }
     if (id.startsWith("p:")) { QFont f = it->font(0); f.setBold(true); it->setFont(0, f); } // a project: bold in its colour
+    if (n.contains("icon")) { it->setData(0, kKindRole, n.value("icon").toString()); it->setIcon(0, kindIcon(n.value("icon").toString())); }
     it->setText(1, n.value("badge").toString());
     it->setToolTip(0, n.value("tooltip").toString());
     if (n.contains("color")) it->setForeground(0, QColor(n.value("color").toString()));
@@ -2038,6 +2053,11 @@ void Host::sidebarFocus() {
 // Keys in the sidebar: Esc goes back to the pane, Enter activates, and a single letter
 // runs the selected entry's action with that key (the old menu's a, x, u, d...).
 bool Host::eventFilter(QObject* o, QEvent* e) {
+  if (e->type() == QEvent::MouseMove && !menuPersist_ && menuBar()->isVisible()) {
+    menuHide_->start(); // still being used
+    if (o == menuBar()) menuHover_ = true; // moved onto it: not just a pointer that happened to be there
+  }
+  if (o == menuBar() && e->type() == QEvent::Leave) menuHover_ = false;
   if (o == caption_ && e->type() == QEvent::MouseButtonRelease && static_cast<QMouseEvent*>(e)->button() == Qt::LeftButton) {
     foldHere(!hereFolded_);
     return true;

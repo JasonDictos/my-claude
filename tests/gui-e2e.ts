@@ -138,7 +138,8 @@ await key("Ctrl+Shift+H");
 l = await u.shows("a shell pane", (x) => titles(x) === "r1,r2,shell:r1");
 const shell = l.terminals.find((t: any) => t.title === "shell:r1");
 await u.shows("the shell focused", (x) => x.terminals.find((t: any) => t.id === shell.id)?.active === true);
-if (!l.nodes.some((n: any) => n.label === "shell:r1")) await u.shows("the shell in the sidebar", (x) => x.nodes.some((n: any) => n.label === "shell:r1"));
+// in the sidebar under r1, as a shell (an icon says host or container; no repo in the label)
+await u.shows("the shell in the sidebar", (x) => x.nodes.some((n: any) => n.id === `t:demo/${shell.id.split("/").pop()}` || (n.id.startsWith("t:demo/") && /shell$/.test(n.label))));
 // --- Ctrl+Shift+X on it: asks, then only the shell goes
 await key("Ctrl+Shift+X");
 await u.answer({});

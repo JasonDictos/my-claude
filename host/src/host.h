@@ -282,6 +282,7 @@ private:
   QSet<QString> collapsed_;
   class QLabel* caption_ = nullptr; // this machine's section header ("PROJECTS @ <host>")
   bool hereFolded_ = false;
+  bool menuHover_ = false; // the mouse moved over the Alt-shown menu bar
   void foldHere(bool fold);
   int openSections() const;
   void setTree(const QJsonArray& nodes);

@@ -19,6 +19,7 @@ export interface Peer {
   origin?: string; // "org/repo" when my-claude cloned it: enough to clone it again after undelete
   branch?: string;
   kickoff?: string; // first prompt, sent once when the conversation is new (a work order)
+  label?: string; // what the window calls it, when the user renamed it
 }
 
 export interface Project {

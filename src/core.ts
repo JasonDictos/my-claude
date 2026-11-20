@@ -778,7 +778,7 @@ export async function ls(): Promise<ProjectRow[]> {
 
 // Everything the native app draws, in one pass: one tmux call per running project and one
 // scan of /proc for all of them (status() per project would scan it once per peer).
-export interface PeerSnap extends Peer { state: PeerState; pane: string | null; attn: Attention }
+export interface PeerSnap extends Peer { state: PeerState; pane: string | null; attn: Attention; boxed: boolean | null } // boxed: its claude runs in a container (null: not running)
 export interface ProjectSnap { project: Project; up: boolean; state: ProjectState; color: string; attn: Attention; peers: PeerSnap[]; panes: tmux.PaneRow[] }
 export async function snapshot(): Promise<ProjectSnap[]> {
   const pidOf = occupantsIndex();
@@ -789,12 +789,21 @@ export async function snapshot(): Promise<ProjectSnap[]> {
     const rows = up ? await tmux.panes(p.name) : [];
     const peers: PeerSnap[] = p.peers.map((peer) => {
       const pane = tmux.peerPane(rows, peer.repo);
-      return { ...peer, state: peerStateOf(pane ? Math.max(0, now - pane.start) : null, pidOf(peer.path)), pane: pane?.id ?? null, attn: attention(p.name, peer.repo) };
+      const pid = pidOf(peer.path);
+      return { ...peer, state: peerStateOf(pane ? Math.max(0, now - pane.start) : null, pid), pane: pane?.id ?? null, attn: attention(p.name, peer.repo), boxed: pid ? !!containerOf(pid) : null };
     });
     const state: ProjectState = !up ? "DOWN" : peers.every((x) => x.state === "live") ? "UP" : "PARTIAL";
     const attn: Attention = peers.some((x) => x.attn === "ask") ? "ask" : peers.some((x) => x.attn === "wait") ? "wait" : null;
     return { project: p, up, state, color: projectColor(p.name, p.color).ink, attn, peers, panes: rows };
   }));
+}
+
+// What the window calls a peer; empty: its repo (or path) again.
+export function renamePeer(name: string, repo: string, label: string): void {
+  const p = load(name);
+  const peer = peerOf(p, repo);
+  if (label.trim()) peer.label = label.trim(); else delete peer.label;
+  save(p);
 }
 
 // `MY_CLAUDE_PROJECT=x MY_CLAUDE_PEER=y claude <args>` for a shell inside the peer's environment.
