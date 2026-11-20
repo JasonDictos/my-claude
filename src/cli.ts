@@ -39,7 +39,7 @@ const USAGE = `usage: my-claude [cui] [--remote user@host] <command> [args]   (n
   gui    --remote … --save | --local | --forget   that machine by default / this one once / no default
   gui    --remote … --pin [--name N] | --unpin N  save that machine, with a "my-claude <name>" launcher
   gui    --connect <name>                this machine's window, with that saved machine's projects in it
-  gui    --toggle | --build              show or hide the window full screen / rebuild it
+  gui    --toggle | --build              show or hide the window (Ctrl+Alt+T) / rebuild it
   --install | --uninstall                the window in the desktop's application menu, with its show/hide key
   deploy user@host[:port] [--identity F] [--jump H] [--no-service]   put my-claude on that machine (~/.local, no root)
   daemon                                 owns the projects' state, brings back what fell over, optional ssh endpoint

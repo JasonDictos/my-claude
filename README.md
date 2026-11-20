@@ -206,7 +206,7 @@ terminal: a Qt app (`host/`, needs Qt 6 and qtermwidget) driven by my-claude.
 ```bash
 my-claude gui              # build on first use, open (or raise) the window
 my-claude --install        # in the application menu (Development) and launcher search, and
-                           # Ctrl+Alt+T: show it full screen in front, or hide it (gui.toggleKey)
+                           # Ctrl+Alt+T: show it in front, or hide it (gui.toggleKey)
 tests/gui-demo.sh          # try it in a sandbox: temp HOME, fake claude, private tmux
 ```
 
@@ -232,6 +232,8 @@ tests/gui-demo.sh          # try it in a sandbox: temp HOME, fake claude, privat
 - **F1** shows a bar of every key for what has the focus; holding it labels each part of
   the window with its keys. **Alt** brings back a hidden menu bar (right-click the bar or
   the PROJECTS caption: Persist menu bar).
+- **Dropdown mode** (Settings → Window, Guake style): the window is always full screen,
+  hides when another window takes the focus, and Ctrl+Alt+T brings it back.
 - **Scrollback is unlimited** by default and lives on disk
   (`~/.cache/my-claude/scrollback`), not in memory. tmux keeps its own, bounded
   (`historyLimit`, 50,000 lines a pane: about 40 MB each at most), which is what a new
@@ -257,7 +259,7 @@ Keys, all changeable in Settings → Shortcuts (stored as `gui.keys` in `setting
 | `Shift+PgUp/PgDn`, the wheel | scroll |
 | `F1` (hold it: on the window) | every key |
 | `F11`, `Ctrl+Shift+Q` | full screen, quit |
-| `Ctrl+Alt+T` (anywhere, after `--install`) | show the window full screen in front, or hide it |
+| `Ctrl+Alt+T` (anywhere, after `--install`) | show the window in front, or hide it |
 
 Settings (my-claude → Settings…, or `gui` in `settings.json`): `font`, `fontSize`,
 `scheme` (a named qtermwidget scheme instead of the tinted one), `tint` (0-100),

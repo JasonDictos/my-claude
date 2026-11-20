@@ -253,6 +253,8 @@ private:
   int scrollback_ = -1;                   // lines; -1: unlimited, on disk
   int seedLines_ = 50000;                 // how much of tmux's scrollback a pane starts with
   bool copyOnSelect_ = true;
+  bool dropdown_ = false; // Guake style: full screen, hidden on focus loss, summoned by the key
+  void showAsSet();
   qint64 scrollbackCap_ = 20LL << 30;     // bytes on disk before the largest history is dropped
   QProcessEnvironment childEnv() const;
   TmuxControl* controlFor(const QString& session);

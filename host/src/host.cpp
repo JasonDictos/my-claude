@@ -319,6 +319,11 @@ Host::Host(const QString& socketPath, const QString& driverCmd, QWidget* parent)
   keyBarTimer_->setInterval(30000);
   connect(keyBarTimer_, &QTimer::timeout, this, &Host::hideKeyBar);
   qApp->installEventFilter(this);
+  // dropdown mode: gone when another app takes the focus (not while a dialog of ours is up:
+  // a folder picker may run outside the app)
+  connect(qApp, &QGuiApplication::applicationStateChanged, this, [this](Qt::ApplicationState st) {
+    if (st == Qt::ApplicationInactive && dropdown_ && isVisible() && !QApplication::activeModalWidget() && asks_.isEmpty()) hide();
+  });
   updateCenter();
   applyTransparency();
   // after main() has said whether this window is for another machine (setRemote)
@@ -537,7 +542,7 @@ void Host::handle(const QJsonObject& m, QLocalSocket* from) {
     showInFront();
     return;
   }
-  if (op == "raise") { show(); setWindowState(windowState() & ~Qt::WindowMinimized); raise(); activateWindow(); return; }
+  if (op == "raise") { showAsSet(); setWindowState(windowState() & ~Qt::WindowMinimized); raise(); activateWindow(); return; }
   if (op == "quit") { close(); qApp->quit(); return; } // quit even when hidden (closing a hidden window ends nothing)
   if (op == "emit") { emitEvent(m.value("event").toObject()); return; }
   if (op == "send") { if (terms_.contains(id)) terms_[id].widget->sendText(m.value("text").toString()); else noTerm(); return; }
@@ -550,6 +555,7 @@ void Host::handle(const QJsonObject& m, QLocalSocket* from) {
   if (op == "look") {
     if (m.contains("scrollback")) scrollback_ = m.value("scrollback").toInt(-1) == 0 ? -1 : m.value("scrollback").toInt(-1);
     if (m.contains("copyOnSelect")) copyOnSelect_ = m.value("copyOnSelect").toBool(true);
+    if (m.contains("dropdown")) { dropdown_ = m.value("dropdown").toBool(); if (dropdown_ && isVisible()) showFullScreen(); }
     if (m.contains("scrollbackCapGB")) scrollbackCap_ = qint64(qMax(1.0, m.value("scrollbackCapGB").toDouble(20))) << 30;
     if (m.contains("clipboardFromPrograms")) clipboardFromPrograms_ = m.value("clipboardFromPrograms").toBool(true);
     if (m.contains("menuPersist")) setMenuPersist(m.value("menuPersist").toBool(true));
@@ -2108,7 +2114,7 @@ void Host::local(const QString& a) {
   else if (a == "host.font-bigger") { ++fontSize_; applyFont(); }
   else if (a == "host.font-smaller") { fontSize_ = qMax(6, fontSize_ - 1); applyFont(); }
   else if (a == "host.font-reset") { fontSize_ = baseFontSize_; applyFont(); }
-  else if (a == "host.fullscreen") setWindowState(windowState() ^ Qt::WindowFullScreen);
+  else if (a == "host.fullscreen") { if (!dropdown_) setWindowState(windowState() ^ Qt::WindowFullScreen); } // dropdown mode is always full screen
   else if (a == "host.settings") openSettings();
   else if (a == "host.driver-restart") {
     driverStarts_.clear();
@@ -2206,7 +2212,14 @@ void Host::revealFirst() {
   if (revealed_) return;
   revealed_ = true;
   if (startHidden_) return; // started for show/hide: that request shows it
+  showAsSet();
+}
+
+// Full screen in dropdown mode, otherwise as it was (not minimised).
+void Host::showAsSet() {
+  if (dropdown_) { showFullScreen(); return; }
   show();
+  setWindowState(windowState() & ~Qt::WindowMinimized);
 }
 
 void Host::showInFront() {
@@ -2215,10 +2228,10 @@ void Host::showInFront() {
   // on screen without the focus is shown again rather than raised
   if (QGuiApplication::platformName() == "wayland" && isVisible() && !isActiveWindow()) {
     hide();
-    QTimer::singleShot(40, this, [this] { showFullScreen(); raise(); activateWindow(); focusCurrent(); });
+    QTimer::singleShot(40, this, [this] { showAsSet(); raise(); activateWindow(); focusCurrent(); });
     return;
   }
-  showFullScreen();
+  showAsSet();
   raise();
   activateWindow();
 #ifdef MC_HAVE_XCB
