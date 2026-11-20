@@ -293,6 +293,7 @@ async function main(argv: string[]): Promise<number> {
       const r = await core.undelete(rest[0], (m) => console.error(m));
       console.log(`restored ${r.name}${r.recloned.length ? ` (cloned again: ${r.recloned.join(", ")})` : ""}`);
       for (const m of r.missing) console.error(`missing: ${m}  (re-create it at that path, or add it again)`);
+      for (const m of r.leftOut) console.error(`left out ${m}`);
       return r.missing.length ? 1 : 0;
     }
     case "next": case "prev": {

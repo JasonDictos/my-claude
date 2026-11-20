@@ -20,6 +20,8 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSpinBox>
+#include <QHeaderView>
+#include <QTreeWidget>
 #include <QVBoxLayout>
 
 FormDialog::FormDialog(const QJsonObject& spec, QWidget* parent) : QDialog(parent) {
@@ -110,60 +112,63 @@ void FormDialog::addFields(QFormLayout* form, const QJsonObject& schema, const Q
     Field f{key, group, type, required.contains(key), nullptr};
     QWidget* row = nullptr;
     if (p.contains("enum") && format == "picker") {
-      // many choices, a search box over them, any number ticked: an "array of enum" value
+      // many choices with columns, a search box over them, any number ticked: an "array of enum" value
       auto* box = new QWidget(this);
       auto* v = new QVBoxLayout(box);
       v->setContentsMargins(0, 0, 0, 0);
       auto* search = new QLineEdit(box);
       search->setPlaceholderText("Search…");
       search->setClearButtonEnabled(true);
-      auto* lw = new QListWidget(box);
-      lw->setProperty("picker", true); // not the object name: every field's widget is named after its key
-      lw->setProperty("note", p.value("note").toString()); // "loading…" while the driver fetches the choices
-      const QJsonArray labels = p.value("enumLabels").toArray();
+      auto* tw = new QTreeWidget(box);
+      tw->setProperty("picker", true); // not the object name: every field's widget is named after its key
+      tw->setProperty("note", p.value("note").toString()); // "loading…" while the driver fetches the choices
+      setupTable(tw, p);
       QSet<QString> ticked;
-      for (const auto& c : cur.toArray()) ticked << c.toString();
-      int i = 0;
-      for (const auto& e : p.value("enum").toArray()) {
-        auto* it = new QListWidgetItem(i < labels.size() ? labels[i].toString() : e.toString(), lw);
-        it->setData(Qt::UserRole, e.toVariant());
-        it->setFlags(it->flags() | Qt::ItemIsUserCheckable);
-        it->setCheckState(ticked.contains(e.toString()) ? Qt::Checked : Qt::Unchecked);
-        ++i;
-      }
+      for (const auto& t : cur.toArray()) ticked << t.toString();
+      fillTable(tw, p.value("enum").toArray(), rowsOf(p), QString(), &ticked);
       auto* count = new QLabel(box);
-      const auto recount = [lw, count] {
+      const auto recount = [tw, count] {
         int shown = 0, on = 0;
-        for (int k = 0; k < lw->count(); ++k) { shown += !lw->item(k)->isHidden(); on += lw->item(k)->checkState() == Qt::Checked; }
-        const QString note = lw->property("note").toString();
+        for (int k = 0; k < tw->topLevelItemCount(); ++k) { shown += !tw->topLevelItem(k)->isHidden(); on += tw->topLevelItem(k)->checkState(0) == Qt::Checked; }
+        const QString note = tw->property("note").toString();
         count->setText(QString("%1 shown · %2 ticked").arg(shown).arg(on) + (note.isEmpty() ? QString() : "   " + note));
       };
-      connect(search, &QLineEdit::textChanged, lw, [lw, recount](const QString& q) {
+      connect(search, &QLineEdit::textChanged, tw, [tw, recount](const QString& q) {
         const QStringList words = q.split(' ', Qt::SkipEmptyParts);
-        for (int k = 0; k < lw->count(); ++k) {
-          const QString t = lw->item(k)->text();
+        for (int k = 0; k < tw->topLevelItemCount(); ++k) {
+          QStringList cells;
+          for (int col = 0; col < tw->columnCount(); ++col) cells << tw->topLevelItem(k)->text(col);
+          const QString t = cells.join(' ');
           bool hit = true;
           for (const QString& w : words) hit = hit && t.contains(w, Qt::CaseInsensitive);
-          lw->item(k)->setHidden(!hit);
+          tw->topLevelItem(k)->setHidden(!hit);
         }
         recount();
       });
-      // a click on the row ticks it, not only on the box; space too
-      connect(lw, &QListWidget::itemClicked, lw, [recount](QListWidgetItem* it) { Q_UNUSED(it); recount(); });
-      connect(lw, &QListWidget::itemChanged, lw, [recount](QListWidgetItem*) { recount(); });
-      connect(lw, &QListWidget::itemDoubleClicked, lw, [](QListWidgetItem* it) { it->setCheckState(it->checkState() == Qt::Checked ? Qt::Unchecked : Qt::Checked); });
-      // Enter in the search box ticks the only match, or the first
-      connect(search, &QLineEdit::returnPressed, lw, [lw] {
-        for (int k = 0; k < lw->count(); ++k) if (!lw->item(k)->isHidden()) { lw->item(k)->setCheckState(Qt::Checked); break; }
+      connect(tw, &QTreeWidget::itemChanged, tw, [recount](QTreeWidgetItem*, int) { recount(); });
+      connect(tw, &QTreeWidget::itemDoubleClicked, tw, [](QTreeWidgetItem* it, int) { it->setCheckState(0, it->checkState(0) == Qt::Checked ? Qt::Unchecked : Qt::Checked); });
+      // Enter in the search box ticks the first match
+      connect(search, &QLineEdit::returnPressed, tw, [tw] {
+        for (int k = 0; k < tw->topLevelItemCount(); ++k) if (!tw->topLevelItem(k)->isHidden()) { tw->topLevelItem(k)->setCheckState(0, Qt::Checked); break; }
       });
-      lw->setMinimumHeight(320);
+      tw->setMinimumHeight(320);
+      tw->setMinimumWidth(640);
       v->addWidget(search);
-      v->addWidget(lw, 1);
+      v->addWidget(tw, 1);
       v->addWidget(count);
       recount();
-      f.widget = lw;
+      f.widget = tw;
       row = box;
       search->setFocus();
+    } else if (p.contains("enum") && format == "table") {
+      // one choice from rows with columns (`columns` the headers, `enumRows` a row per choice)
+      auto* tw = new QTreeWidget(this);
+      setupTable(tw, p);
+      fillTable(tw, p.value("enum").toArray(), rowsOf(p), cur.toString(), nullptr);
+      tw->setMinimumHeight(260);
+      tw->setMinimumWidth(640);
+      connect(tw, &QTreeWidget::itemDoubleClicked, this, [this] { accept(); });
+      f.widget = tw;
     } else if (p.contains("enum") && format == "list") {
       auto* lw = new QListWidget(this);
       const QJsonArray labels = p.value("enumLabels").toArray();
@@ -247,6 +252,13 @@ void FormDialog::addFields(QFormLayout* form, const QJsonObject& schema, const Q
 void FormDialog::refilter(const QString& key) {
   QComboBox* cb = filters_.value(key);
   for (const Field& f : fields_) {
+    if (auto* tw = qobject_cast<QTreeWidget*>(f.widget); tw && f.key == key && cb) {
+      const QString want = cb->currentData().toString();
+      for (int k = 0; k < tw->topLevelItemCount(); ++k) tw->topLevelItem(k)->setHidden(want != "*" && !tw->topLevelItem(k)->data(0, Qt::UserRole).toString().startsWith(want + "|"));
+      if (!tw->currentItem() || tw->currentItem()->isHidden())
+        for (int k = 0; k < tw->topLevelItemCount(); ++k) if (!tw->topLevelItem(k)->isHidden()) { tw->setCurrentItem(tw->topLevelItem(k)); break; }
+      continue;
+    }
     auto* lw = qobject_cast<QListWidget*>(f.widget);
     if (f.key != key || !lw || !cb) continue;
     const QString want = cb->currentData().toString();
@@ -258,11 +270,22 @@ void FormDialog::refilter(const QString& key) {
 
 // A list's choices arriving while the dialog is open: ticks and the selection stay, the
 // search and the filter still apply.
-void FormDialog::setChoices(const QString& key, const QJsonArray& choices, const QJsonArray& labels, const QString& note) {
+void FormDialog::setChoices(const QString& key, const QJsonArray& choices, const QJsonArray& labels, const QString& note, const QJsonArray& rows) {
   for (const Field& f : fields_) {
-    auto* lw = qobject_cast<QListWidget*>(f.widget);
-    if (f.key != key || !lw) continue;
-    if (!lw->property("picker").toBool()) { // a single-choice list
+    auto* tw = qobject_cast<QTreeWidget*>(f.widget);
+    if (f.key != key) continue;
+    QJsonArray r = rows;
+    if (r.isEmpty()) for (const auto& l : labels) r << QJsonArray{l};
+    if (tw && tw->property("picker").toBool()) { // ticks stay, the search still applies
+      QSet<QString> ticked;
+      for (int k = 0; k < tw->topLevelItemCount(); ++k) if (tw->topLevelItem(k)->checkState(0) == Qt::Checked) ticked << tw->topLevelItem(k)->data(0, Qt::UserRole).toString();
+      fillTable(tw, choices, r, QString(), &ticked);
+      tw->setProperty("note", note);
+      if (auto* search = tw->parentWidget()->findChild<QLineEdit*>()) emit search->textChanged(search->text()); // filter and count again
+    } else if (tw) {
+      fillTable(tw, choices, r, tw->currentItem() ? tw->currentItem()->data(0, Qt::UserRole).toString() : QString(), nullptr);
+      refilter(key);
+    } else if (auto* lw = qobject_cast<QListWidget*>(f.widget)) {
       const QString cur = lw->currentItem() ? lw->currentItem()->data(Qt::UserRole).toString() : QString();
       {
         const QSignalBlocker hush(lw);
@@ -274,23 +297,53 @@ void FormDialog::setChoices(const QString& key, const QJsonArray& choices, const
         }
       }
       refilter(key);
-      continue;
     }
-    QSet<QString> ticked;
-    for (int k = 0; k < lw->count(); ++k) if (lw->item(k)->checkState() == Qt::Checked) ticked << lw->item(k)->data(Qt::UserRole).toString();
-    {
-      const QSignalBlocker hush(lw);
-      lw->clear();
-      for (int i = 0; i < choices.size(); ++i) {
-        auto* it = new QListWidgetItem(i < labels.size() ? labels[i].toString() : choices[i].toString(), lw);
-        it->setData(Qt::UserRole, choices[i].toVariant());
-        it->setFlags(it->flags() | Qt::ItemIsUserCheckable);
-        it->setCheckState(ticked.contains(choices[i].toString()) ? Qt::Checked : Qt::Unchecked);
-      }
-    }
-    lw->setProperty("note", note);
-    if (auto* search = lw->parentWidget()->findChild<QLineEdit*>()) emit search->textChanged(search->text()); // filter and count again
   }
+}
+
+// Headers from `columns`, sortable by clicking them; `sort: [column, "asc"|"desc"]` first.
+void FormDialog::setupTable(QTreeWidget* tw, const QJsonObject& p) {
+  QStringList heads;
+  for (const auto& c : p.value("columns").toArray()) heads << c.toString();
+  if (heads.isEmpty()) heads << QString();
+  tw->setHeaderLabels(heads);
+  tw->setHeaderHidden(heads.size() == 1 && heads[0].isEmpty());
+  tw->setRootIsDecorated(false);
+  tw->setUniformRowHeights(true);
+  tw->setAllColumnsShowFocus(true);
+  const QJsonArray sort = p.value("sort").toArray();
+  tw->header()->setSortIndicator(sort.isEmpty() ? 0 : sort.at(0).toInt(), sort.at(1).toString() == "desc" ? Qt::DescendingOrder : Qt::AscendingOrder);
+  tw->setSortingEnabled(true);
+}
+
+// A row per choice: `enumRows`, else the label (or the value) as the only cell.
+QJsonArray FormDialog::rowsOf(const QJsonObject& p) {
+  if (p.contains("enumRows")) return p.value("enumRows").toArray();
+  QJsonArray rows;
+  const QJsonArray labels = p.value("enumLabels").toArray(), values = p.value("enum").toArray();
+  for (int i = 0; i < values.size(); ++i) rows << QJsonArray{i < labels.size() ? labels[i] : values[i]};
+  return rows;
+}
+
+// A table's rows, a choice each (its value kept on the row): `ticked` makes them checkable,
+// else `cur` stays selected. Sorted by the column the user (or the schema) chose.
+void FormDialog::fillTable(QTreeWidget* tw, const QJsonArray& choices, const QJsonArray& rows, const QString& cur, const QSet<QString>* ticked) {
+  const QSignalBlocker hush(tw);
+  tw->setSortingEnabled(false);
+  tw->clear();
+  for (int i = 0; i < choices.size(); ++i) {
+    QStringList cells;
+    for (const auto& c : rows.at(i).toArray()) cells << c.toVariant().toString();
+    auto* it = new QTreeWidgetItem(tw, cells.isEmpty() ? QStringList{choices[i].toVariant().toString()} : cells);
+    it->setData(0, Qt::UserRole, choices[i].toVariant());
+    if (ticked) {
+      it->setFlags(it->flags() | Qt::ItemIsUserCheckable);
+      it->setCheckState(0, ticked->contains(choices[i].toString()) ? Qt::Checked : Qt::Unchecked);
+    } else if (choices[i].toString() == cur) tw->setCurrentItem(it);
+  }
+  tw->setSortingEnabled(true);
+  if (!ticked && !tw->currentItem() && tw->topLevelItemCount()) tw->setCurrentItem(tw->topLevelItem(0));
+  for (int c = 0; c < tw->columnCount(); ++c) tw->resizeColumnToContents(c);
 }
 
 QJsonValue FormDialog::read(const Field& f) const {
@@ -301,15 +354,16 @@ QJsonValue FormDialog::read(const Field& f) const {
     if (f.type == "boolean") return v.toBool();
     return v.toString();
   };
-  if (auto* lw = qobject_cast<QListWidget*>(w); lw && lw->property("picker").toBool()) {
+  if (auto* tw = qobject_cast<QTreeWidget*>(w); tw && tw->property("picker").toBool()) {
     QJsonArray a;
-    for (int k = 0; k < lw->count(); ++k) if (lw->item(k)->checkState() == Qt::Checked) a << QJsonValue::fromVariant(lw->item(k)->data(Qt::UserRole));
+    for (int k = 0; k < tw->topLevelItemCount(); ++k) if (tw->topLevelItem(k)->checkState(0) == Qt::Checked) a << QJsonValue::fromVariant(tw->topLevelItem(k)->data(0, Qt::UserRole));
     // nothing ticked: the highlighted one, so arrowing to a repo and pressing Enter adds it
     if (a.isEmpty())
-      for (QListWidgetItem* it : lw->selectedItems()) if (!it->isHidden()) a << QJsonValue::fromVariant(it->data(Qt::UserRole));
+      for (QTreeWidgetItem* it : tw->selectedItems()) if (!it->isHidden()) a << QJsonValue::fromVariant(it->data(0, Qt::UserRole));
     return a;
   }
   if (auto* lw = qobject_cast<QListWidget*>(w)) return lw->currentItem() ? typed(lw->currentItem()->data(Qt::UserRole)) : QJsonValue();
+  if (auto* tw = qobject_cast<QTreeWidget*>(w)) return tw->currentItem() && !tw->currentItem()->isHidden() ? typed(tw->currentItem()->data(0, Qt::UserRole)) : QJsonValue();
   if (auto* cb = qobject_cast<QComboBox*>(w)) return typed(cb->currentData());
   if (auto* c = qobject_cast<QCheckBox*>(w)) return c->isChecked();
   if (auto* s = qobject_cast<QSpinBox*>(w)) return s->value();

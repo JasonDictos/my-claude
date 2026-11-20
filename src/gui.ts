@@ -19,6 +19,8 @@ import { out, sh, shOk } from "./sh.ts";
 
 type Dict = Record<string, any>;
 type Repo = { name: string; description: string };
+// "2026-11-20 10:04": readable, and sorts as text
+const stamp = (ms: number) => { const d = new Date(ms), z = (n: number) => String(n).padStart(2, "0"); return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())} ${z(d.getHours())}:${z(d.getMinutes())}`; };
 const POLL_MS = 1500;
 const MODELS = ["default", "fable-5.1", "opus-5.5", "sonnet-5.5"];
 const BUILD_HELP = `my-claude gui: the window is a small Qt program in ${ROOT}/host. It needs cmake, ninja, a C++ compiler,
@@ -271,7 +273,7 @@ function adoptShellEnv(): void {
 interface TermSpec { id: string; tab: string; title: string; color: string; attention: string; node: string; scheme?: string; textStep?: number; skey?: string }
 interface Target { name: string | null; repo: string | null; pane: string | null }
 
-const DOT_YELLOW = "#ffd75f", DOT_RED = "#ff5f5f", DOT_GRAY = "#7a7f87";
+const DOT_YELLOW = "#ffd75f", DOT_RED = "#ff5f5f";
 const SHELL_COLOR = "#9aa0a6", CHAT_COLOR = "#d7af5f";
 const attnBadge = (a: Attention) => attentionMark(a).trim();
 const attnColor = (a: Attention) => (a === "ask" ? DOT_RED : DOT_YELLOW);
@@ -308,6 +310,11 @@ class Driver {
     void this.ghWhoami().catch(() => {});
     void this.sshWhoami().catch(() => {});
     { const org = String(config().clone?.defaultOrg ?? ""); if (org) void this.orgRepos(org).catch(() => {}); }
+    // the machines that were connected (a window that still has them keeps them as they are)
+    for (const n of ([] as string[]).concat(config().gui?.connected ?? [])) {
+      const h = (config().gui?.hosts ?? {})[n] as { dest?: string; port?: number; key?: string; jump?: string } | undefined;
+      if (h?.dest) this.connectMachine(n, h);
+    }
     // terminals already shown: our predecessor died; take them as they are, then say who we
     // are (which hands us what the user did meanwhile)
     const have = await this.list();
@@ -590,14 +597,7 @@ class Driver {
     if (s.up) actions.push(act("project.down", "Bring down…", "d"));
     actions.push(act("project.delete", "Delete project…", "x"));
 
-    // dots in the project's colour, the shape saying the state (stopped: the colour muted;
-    // held by a Claude started elsewhere: a red bang)
-    const muted = (() => {
-      const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(s.color);
-      return m ? "#" + [1, 2, 3].map((i) => Math.round((parseInt(m[i], 16) + 0x60) / 2).toString(16).padStart(2, "0")).join("") : DOT_GRAY;
-    })();
     const peerNode = (peer: core.PeerSnap): Dict => {
-      const [dot, dotColor] = peer.state === "live" ? ["full", s.color] : peer.state === "starting" ? ["half", s.color] : peer.state === "idle" ? ["ring", s.color] : peer.state === "occupied" ? ["bang", DOT_RED] : ["ring", muted];
       const shells = s.panes.filter((x) => x.title !== tmux.PANEL_TITLE && core.shellRepo(tmux.label(x)) === peer.repo);
       const pa: Dict[] = [act("peer.focus", peer.pane ? "Go to its pane" : "Start", "", s.up || p.peers.length > 0), sep,
         act("peer.shell", "Shell in its environment", "h", !!peer.pane), act("peer.hostshell", "Host shell in its checkout", "H", s.up),
@@ -606,7 +606,8 @@ class Driver {
       if (peer.state === "occupied") pa.push(act("peer.takeover", "Take over (stop the session holding it)…"));
       pa.push(sep, act("peer.remove", "Remove from project…", "x"));
       return {
-        id: `r:${name}/${peer.repo}`, label: peer.repo + (peer.repo === p.lead ? " ★" : ""), dot, dotColor, dim: peer.state === "down",
+        // greyed while its Claude is not running here
+        id: `r:${name}/${peer.repo}`, label: peer.repo + (peer.repo === p.lead ? " ★" : ""), dim: peer.state === "down" || peer.state === "occupied",
         badge: attnBadge(peer.attn), badgeColor: attnColor(peer.attn), actions: pa,
         tooltip: `${tilde(peer.path)}\n${peer.state}${peer.model ? " · " + peer.model : ""} · conversation ${peer.session.slice(0, 8)}`,
         children: shells.map((x) => ({ id: `t:${name}/${x.id}`, label: tmux.label(x), color: SHELL_COLOR, actions: [act("pane.focus", "Go to it"), act("pane.close", "Close…", "x")] })),
@@ -614,8 +615,7 @@ class Driver {
     };
     const chat = s.panes.find((x) => tmux.label(x) === `chat:${name}`);
     return {
-      id: `p:${name}`, label: name, color: s.color, bold: this.shown.has(name), dim: !s.up,
-      dot: s.state === "UP" ? "full" : s.state === "PARTIAL" ? "half" : "ring", dotColor: s.state === "UP" || s.state === "PARTIAL" ? s.color : muted,
+      id: `p:${name}`, label: name, color: s.color,
       badge: attnBadge(s.attn), badgeColor: attnColor(s.attn), actions,
       tooltip: [p.goal ? `Goal: ${p.goal.split("\n")[0].slice(0, 160)}` : "", p.ticket ? `Ticket: ${p.ticket}` : "", `${p.mode === "shared" ? "one shared container" : "a container per repo"} · profile ${p.profile} · ${s.state}`].filter(Boolean).join("\n"),
       children: [...s.peers.map(peerNode), ...(chat ? [{ id: `t:${name}/${chat.id}`, label: "chat", color: CHAT_COLOR, actions: [act("pane.focus", "Go to it"), act("pane.close", "Leave the chat…", "x")] }] : [])],
@@ -934,8 +934,13 @@ class Driver {
       case "app.machines": return this.machines();
       case "app.disconnect": {
         const names = Object.keys(config().gui?.hosts ?? {});
-        const v = await this.ask({ title: "Disconnect", schema: { type: "object", properties: { which: { type: "string", title: "Machine", format: "list", enum: names } } }, values: { which: names[0] }, ok: "Disconnect" });
-        if (v?.which) this.send({ op: "disconnect", machine: String(v.which) });
+        const hs = (config().gui?.hosts ?? {}) as Record<string, { dest?: string; port?: number }>;
+        const v = await this.ask({ title: "Disconnect", schema: { type: "object", properties: { which: { type: "string", title: "Machine", format: "table", enum: names,
+          columns: ["Machine", "Host"], enumRows: names.map((n) => [n, `${hs[n].dest ?? ""}${hs[n].port ? `:${hs[n].port}` : ""}`]) } } }, values: { which: names[0] }, ok: "Disconnect" });
+        if (v?.which) {
+          this.send({ op: "disconnect", machine: String(v.which) });
+          saveConfig({ gui: { connected: ([] as string[]).concat(config().gui?.connected ?? []).filter((x) => x !== String(v.which)) } });
+        }
         return;
       }
       case "app.quickconnect": {
@@ -998,6 +1003,9 @@ class Driver {
     const remoteCmd = String(config().gui?.remoteCommand ?? "my-claude _gui");
     const driver = [...base, dest, `bash -lc 'export PATH="$HOME/.local/bin:$HOME/.bun/bin:$PATH"; exec ${remoteCmd} --stdio'`];
     this.send({ op: "connect", machine: name, driver, tmux: [...base, dest, "tmux"] });
+    // a saved machine stays connected across restarts of the window
+    const kept = ([] as string[]).concat(config().gui?.connected ?? []);
+    if ((config().gui?.hosts ?? {})[name] && !kept.includes(name)) saveConfig({ gui: { connected: [...kept, name] } });
     this.notify(`connecting to ${name}…`);
   }
 
@@ -1008,7 +1016,8 @@ class Driver {
     const hosts = (config().gui?.hosts ?? {}) as Record<string, Host>;
     const names = Object.keys(hosts).sort();
     const pick = await this.ask({ title: "Remote machines", text: "Machines whose projects open in a window here, over ssh. Each is also \"my-claude <name>\" in the application menu.",
-      schema: { type: "object", properties: { which: { type: "string", title: "Machine", format: "list", enum: [...names, "+"], enumLabels: [...names.map((n) => `${n}    ${hosts[n].dest}${hosts[n].port ? `:${hosts[n].port}` : ""}`), "+ Add a machine…"] } } },
+      schema: { type: "object", properties: { which: { type: "string", title: "Machine", format: "table", enum: [...names, "+"], columns: ["Machine", "Host", "Port", "Key", "Jump host"],
+        enumRows: [...names.map((n) => [n, hosts[n].dest ?? "", hosts[n].port ? String(hosts[n].port) : "", hosts[n].key ?? "", hosts[n].jump ?? ""]), ["+ Add a machine…", "", "", "", ""]] } } },
       values: { which: names[0] ?? "+" }, ok: "Edit…", cancel: "Close" });
     if (!pick) return;
     const old = pick.which === "+" ? null : String(pick.which);
@@ -1148,13 +1157,13 @@ class Driver {
     const choices = () => {
       const all = [...rows].sort((a, b) => b.t.when - a.t.when);
       return { enum: all.map((r) => `${r.m}|${r.t.dir}`),
-        enumLabels: all.map((r) => `${r.t.name}@${r.m === "." ? here : r.m}   (${r.t.peers.join(", ") || "no repos"})   ${new Date(r.t.when).toLocaleString()}`) };
+        enumRows: all.map((r) => [r.t.name, r.m === "." ? here : r.m, r.t.peers.join(", ") || "-", stamp(r.t.when)]) };
     };
     const id = `ask-${++this.askSeq}`;
     const answer = this.ask({ title: "Undelete a project", ok: "Restore", schema: { type: "object", order: ["machine", "which"], properties: {
       ...(names.length ? { machine: { type: "string", title: "Machine", format: "filter", filters: "which", enum: ["*", ".", ...names],
         enumLabels: ["every machine", `this machine (${here})`, ...names] } } : {}),
-      which: { type: "string", title: "Project", format: "list", ...choices() } } } }, id);
+      which: { type: "string", title: "Project", format: "table", columns: ["Project", "Machine", "Repos", "Deleted"], sort: [3, "desc"], ...choices() } } } }, id);
     for (const n of names) {
       void this.onMachine(hosts[n], ["undelete", "--json"], 20_000).then((r) => {
         try { if (r.ok) rows = [...rows, ...(JSON.parse(r.out.split("\n").pop() || "[]") as Trashed[]).map((t) => ({ m: n, t }))]; } catch {}
@@ -1166,7 +1175,7 @@ class Driver {
     if (m === ".") {
       await this.work("*trash", "restoring…", async () => {
         const r = await core.undelete(dir, (msg) => this.progress("*trash", msg));
-        this.notify(`restored ${r.name}${r.recloned.length ? `; cloned again: ${r.recloned.join(", ")}` : ""}${r.missing.length ? `; missing: ${r.missing.join(", ")}` : ""}`, { error: r.missing.length > 0 });
+        this.notify(`restored ${r.name}${r.recloned.length ? `; cloned again: ${r.recloned.join(", ")}` : ""}${r.missing.length ? `; missing: ${r.missing.join(", ")}` : ""}${r.leftOut.length ? `; left out ${r.leftOut.join("; ")}` : ""}`, { error: r.missing.length > 0 });
       });
       return;
     }
@@ -1297,13 +1306,13 @@ class Driver {
     const have = new Set(this.snap(name)?.project.peers.map((x) => x.repo) ?? []);
     const choices = (repos: Repo[]) => {
       const pickable = repos.filter((r) => !have.has(r.name));
-      return { enum: pickable.map((r) => r.name), enumLabels: pickable.map((r) => `${r.name}${r.description ? `   ${r.description.slice(0, 80)}` : ""}`) };
+      return { enum: pickable.map((r) => r.name), enumRows: pickable.map((r) => [r.name, r.description]) };
     };
     // the dialog at once, with the last list known; the fresh one is filled in when it comes
     const cached = org ? this.cachedRepos(org) : null;
     const id = `ask-${++this.askSeq}`;
     const answer = this.ask({ title: `Add repos to ${name}`, ok: "Add", schema: { type: "object", order: ["pick", "folder", "spec"], properties: {
-      ...(org ? { pick: { type: "array", format: "picker", title: `${org}'s repos`, ...choices(cached ?? []), note: cached ? "refreshing…" : "loading…",
+      ...(org ? { pick: { type: "array", format: "picker", title: `${org}'s repos`, columns: ["Repo", "Description"], ...choices(cached ?? []), note: cached ? "refreshing…" : "loading…",
         description: "Tick any number; each is cloned fresh into the project." } } : {}),
       folder: { type: "string", format: "path", title: "A folder here", description: "An existing checkout, used where it is (no clone)." },
       spec: { type: "string", title: "Anything else", placeholder: "org/repo  https://…  git@host:repo  ~/path  (--branch B, --name N after one)", description: "Space separated: other organisations' repos, git URLs, a PR URL, paths." } } } }, id);
@@ -1341,7 +1350,8 @@ class Driver {
   private async projectReadd(name: string): Promise<void> {
     const r = [...(this.snap(name)?.project.removed ?? [])].reverse();
     if (!r.length) return this.notify(`nothing was removed from ${name}`);
-    const v = await this.ask({ title: `Re-add to ${name}`, ok: "Re-add", text: "A removed repo comes back with the same path and the same conversation.", schema: { type: "object", properties: { repo: { type: "string", title: "Repo", format: "list", enum: r.map((x) => x.repo), enumLabels: r.map((x) => `${x.repo}   ${tilde(x.path)}`) } } } });
+    const v = await this.ask({ title: `Re-add to ${name}`, ok: "Re-add", text: "A removed repo comes back with the same path and the same conversation.", schema: { type: "object", properties: { repo: { type: "string", title: "Repo", format: "table", enum: r.map((x) => x.repo),
+      columns: ["Repo", "Folder", "Removed"], sort: [2, "desc"], enumRows: r.map((x) => [x.repo, tilde(x.path), x.when ? stamp(x.when) : ""]) } } } });
     if (!v?.repo) return;
     await this.work(name, `re-adding ${v.repo}…`, async () => { const p = await core.readd(name, String(v.repo), (m) => this.progress(name, m)); await core.syncGroupNow(name); this.notify(`${p.repo} is back in ${name} (same conversation)`); });
   }

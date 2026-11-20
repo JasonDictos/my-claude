@@ -41,6 +41,7 @@
 #include <QTabBar>
 #include <QTabWidget>
 #include <QTest>
+#include <QStyledItemDelegate>
 #include <QSysInfo>
 #include <QThread>
 #include <QTimer>
@@ -142,12 +143,44 @@ QString tagOf(const QString& s) {
   const int at = project.lastIndexOf('@');
   return at < 0 ? QString() : project.mid(at + 1);
 }
+const int kHostRole = Qt::UserRole + 2, kSectionRole = Qt::UserRole + 3;
+
+// Another machine's section row, like the caption: "PROJECTS @ " small and grey, the host bold white.
+class SectionDelegate : public QStyledItemDelegate {
+public:
+  using QStyledItemDelegate::QStyledItemDelegate;
+  void paint(QPainter* p, const QStyleOptionViewItem& opt, const QModelIndex& idx) const override {
+    if (!idx.data(kSectionRole).toBool()) { QStyledItemDelegate::paint(p, opt, idx); return; }
+    QStyleOptionViewItem o(opt);
+    initStyleOption(&o, idx);
+    o.text.clear();
+    QStyle* st = o.widget ? o.widget->style() : QApplication::style();
+    st->drawControl(QStyle::CE_ItemViewItem, &o, p, o.widget);
+    const QRect r = st->subElementRect(QStyle::SE_ItemViewItemText, &o, o.widget).adjusted(2, 0, -2, 0);
+    QFont small = o.font;
+    small.setPointSizeF(qMax(7.0, small.pointSizeF() - 1));
+    small.setLetterSpacing(QFont::AbsoluteSpacing, 1);
+    QFont bold = o.font;
+    bold.setBold(true);
+    const QString lead = "PROJECTS @ ";
+    p->save();
+    p->setFont(small);
+    p->setPen(QColor("#8d93a3"));
+    p->drawText(r, Qt::AlignVCenter | Qt::AlignLeft, lead);
+    const int x = r.left() + QFontMetrics(small).horizontalAdvance(lead);
+    p->setFont(bold);
+    p->setPen(Qt::white);
+    p->drawText(QRect(x, r.top(), qMax(0, r.right() - x), r.height()), Qt::AlignVCenter | Qt::AlignLeft,
+                QFontMetrics(bold).elidedText(idx.data(kHostRole).toString(), Qt::ElideRight, qMax(0, r.right() - x)));
+    p->restore();
+  }
+};
+
 QJsonArray tagTree(const QJsonArray& nodes, const QString& tag, bool top) {
   QJsonArray out;
   for (const auto& v : nodes) {
     QJsonObject n = v.toObject();
     n["id"] = tagName(n.value("id").toString(), tag);
-    if (top) n["label"] = n.value("label").toString() + "@" + tag;
     if (n.contains("children")) n["children"] = tagTree(n.value("children").toArray(), tag, false);
     out << n;
   }
@@ -210,15 +243,20 @@ Host::Host(const QString& socketPath, const QString& driverCmd, QWidget* parent)
 
   dock_ = new QDockWidget("Projects", this);
   dock_->setObjectName("projects");
-  dock_->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetClosable);
+  dock_->setFeatures(QDockWidget::NoDockWidgetFeatures); // fixed: View shows and hides it
   // a plain caption instead of a title bar with float and close buttons (View shows and hides the list)
   auto* caption = new QLabel("PROJECTS", dock_);
+  caption_ = caption;
+  caption->setTextFormat(Qt::RichText);
+  caption->setCursor(Qt::PointingHandCursor);
+  caption->installEventFilter(this); // a click folds this machine's projects
   caption->setObjectName("docktitle");
   dock_->setTitleBarWidget(caption);
   caption->setContextMenuPolicy(Qt::CustomContextMenu);
   connect(caption, &QWidget::customContextMenuRequested, this, [this, caption](const QPoint& p) { QMenu* m = createPopupMenu(); m->exec(caption->mapToGlobal(p)); m->deleteLater(); });
   tree_ = new QTreeWidget(dock_);
   tree_->setColumnCount(2);
+  tree_->setItemDelegateForColumn(0, new SectionDelegate(tree_));
   tree_->setHeaderHidden(true);
   tree_->setIndentation(14);
   tree_->setUniformRowHeights(true);
@@ -242,9 +280,13 @@ Host::Host(const QString& socketPath, const QString& driverCmd, QWidget* parent)
     if (!it || !tree_->hasFocus()) return;
     const QString node = it->data(0, Qt::UserRole).toString();
     for (const Term& t : terms_) if (t.node == node) { reveal(t.id); return; }
-    if (!it->parent()) if (Tab* tab = tabOf(it->text(0))) tabs_->setCurrentWidget(tab->page);
+    if (node.startsWith("p:")) if (Tab* tab = tabOf(node.mid(2))) tabs_->setCurrentWidget(tab->page); // its tab: "name", or "name@machine"
   });
-  connect(tree_, &QTreeWidget::itemCollapsed, this, [this](QTreeWidgetItem* it) { collapsed_.insert(it->data(0, Qt::UserRole).toString()); });
+  connect(tree_, &QTreeWidget::itemCollapsed, this, [this](QTreeWidgetItem* it) {
+    collapsed_.insert(it->data(0, Qt::UserRole).toString());
+    // one machine's section always stays open
+    if (it->data(0, kSectionRole).toBool() && openSections() == 0) QTimer::singleShot(0, this, [this, it] { if (nodeItems_.values().contains(it)) it->setExpanded(true); });
+  });
   connect(tree_, &QTreeWidget::itemExpanded, this, [this](QTreeWidgetItem* it) { collapsed_.remove(it->data(0, Qt::UserRole).toString()); });
   connect(tree_, &QTreeWidget::customContextMenuRequested, this, [this](const QPoint& p) {
     if (QTreeWidgetItem* it = tree_->itemAt(p)) showNodeMenu(it->data(0, Qt::UserRole).toString(), tree_->viewport()->mapToGlobal(p), QString());
@@ -539,7 +581,11 @@ void Host::handle(const QJsonObject& m, QLocalSocket* from) {
     mc.tag = tag;
     for (const auto& v : m.value("driver").toArray()) mc.driverArgv << v.toString();
     for (const auto& v : m.value("tmux").toArray()) mc.tmux << v.toString();
-    if (machines_.contains(tag)) stopMachine(tag);
+    if (machines_.contains(tag)) {
+      // the same machine the same way (a restarted driver reconnecting): left as it is
+      if (machines_[tag].driverArgv == mc.driverArgv && machines_[tag].tmux == mc.tmux && machines_[tag].wanted) return;
+      stopMachine(tag);
+    }
     machines_.insert(tag, mc);
     startMachine(tag);
     return;
@@ -654,12 +700,12 @@ void Host::handle(const QJsonObject& m, QLocalSocket* from) {
     setMinimised(id, m.contains("on") ? m.value("on").toBool() : !terms_[id].minimised);
     return;
   }
-  if (op == "tree") { localTree_ = m.value("nodes").toArray(); if (machines_.isEmpty()) setTree(localTree_); else rebuildTree(); if (m.contains("select")) selectNode(m.value("select").toString()); return; }
+  if (op == "tree") { localTree_ = m.value("nodes").toArray(); rebuildTree(); if (m.contains("select")) selectNode(m.value("select").toString()); return; }
   if (op == "sidebar") { if (m.contains("select")) selectNode(m.value("select").toString()); else sidebarFocus(); return; }
   if (op == "menu") { setMenus(m.value("menus").toArray()); return; }
   if (op == "ask") { ask(m); return; }
   if (op == "fill") { // choices that were still loading when the dialog opened
-    if (FormDialog* d = asks_.value(id)) d->setChoices(m.value("key").toString(), m.value("enum").toArray(), m.value("enumLabels").toArray(), m.value("note").toString());
+    if (FormDialog* d = asks_.value(id)) d->setChoices(m.value("key").toString(), m.value("enum").toArray(), m.value("enumLabels").toArray(), m.value("note").toString(), m.value("enumRows").toArray());
     return;
   }
   if (op == "answer") {
@@ -1900,13 +1946,14 @@ void Host::setTree(const QJsonArray& nodes) {
     const QString id = n.value("id").toString();
     it->setData(0, Qt::UserRole, id);
     it->setText(0, n.value("label").toString());
+    if (n.contains("section")) { it->setData(0, kSectionRole, true); it->setData(0, kHostRole, n.value("section").toString()); }
+    if (id.startsWith("p:")) { QFont f = it->font(0); f.setBold(true); it->setFont(0, f); } // a project: bold in its colour
     it->setText(1, n.value("badge").toString());
     it->setToolTip(0, n.value("tooltip").toString());
     if (n.contains("color")) it->setForeground(0, QColor(n.value("color").toString()));
     if (n.contains("badgeColor")) it->setForeground(1, QColor(n.value("badgeColor").toString()));
     if (n.value("bold").toBool()) { QFont f = it->font(0); f.setBold(true); it->setFont(0, f); }
     if (n.value("dim").toBool()) it->setForeground(0, palette().color(QPalette::Disabled, QPalette::Text));
-    it->setIcon(0, dotIcon(n.value("dot").toString(), QColor(n.value("dotColor").toString("#888888"))));
     nodeActions_.insert(id, n.value("actions").toArray());
     nodeItems_.insert(id, it);
     for (const auto& c : n.value("children").toArray()) add(it, c.toObject());
@@ -1991,6 +2038,10 @@ void Host::sidebarFocus() {
 // Keys in the sidebar: Esc goes back to the pane, Enter activates, and a single letter
 // runs the selected entry's action with that key (the old menu's a, x, u, d...).
 bool Host::eventFilter(QObject* o, QEvent* e) {
+  if (o == caption_ && e->type() == QEvent::MouseButtonRelease && static_cast<QMouseEvent*>(e)->button() == Qt::LeftButton) {
+    foldHere(!hereFolded_);
+    return true;
+  }
   if ((e->type() == QEvent::KeyPress || e->type() == QEvent::KeyRelease) && o->isWidgetType() && static_cast<QWidget*>(o)->window() == this) {
     auto* k = static_cast<QKeyEvent*>(e);
     if (k->key() == Qt::Key_Alt && !k->isAutoRepeat()) {
@@ -2505,22 +2556,42 @@ QStringList Host::tmuxFor(const QString& key, QString* session) const {
 }
 
 void Host::rebuildTree() {
-  // every project says where it runs: this machine's by its host name, like the others'
+  // a section per machine: this one's projects under the caption, each other machine's
+  // under a "PROJECTS @ <machine>" row that folds
   const QString here = remote_.isEmpty() ? QSysInfo::machineHostName().section('.', 0, 0) : remote_.section('@', -1);
-  QJsonArray all;
-  for (const auto& v : localTree_) {
-    QJsonObject n = v.toObject();
-    if (!here.isEmpty() && n.value("id").toString().startsWith("p:")) n["label"] = n.value("label").toString() + "@" + here;
-    all << n;
-  }
+  if (caption_) caption_->setText(here.isEmpty() ? QString("PROJECTS") : "PROJECTS @ <b style='color:#ffffff'>" + here.toHtmlEscaped() + "</b>");
+  QJsonArray all = localTree_;
   for (const Machine& mc : machines_) {
-    if (!mc.tree.isEmpty()) { for (const auto& v : mc.tree) all << v; continue; }
-    // not connected (yet, or any more): one entry that says so
-    all << QJsonObject{{"id", "m:" + mc.tag}, {"label", mc.tag}, {"dim", true}, {"dot", mc.state == "failed" ? "bang" : "empty"},
-                       {"dotColor", mc.state == "failed" ? "#e5484d" : "#8d93a3"}, {"badge", mc.state == "failed" ? QString("✗") : QString("…")},
-                       {"tooltip", mc.state == "failed" ? "cannot reach my-claude there (ssh, or my-claude not installed)" : "connecting…"}};
+    QJsonObject head{{"id", "m:" + mc.tag}, {"label", "PROJECTS @ " + mc.tag}, {"section", mc.tag}};
+    if (!mc.tree.isEmpty()) head["children"] = mc.tree;
+    else { // not connected (yet, or any more)
+      head["badge"] = mc.state == "failed" ? QString("✗") : QString("…");
+      head["tooltip"] = mc.state == "failed" ? "cannot reach my-claude there (ssh, or my-claude not installed)" : "connecting…";
+    }
+    all << head;
   }
   setTree(all);
+  foldHere(hereFolded_);
+}
+
+// This machine's projects folded away under the caption (unless that would leave no section open).
+void Host::foldHere(bool fold) {
+  if (fold && !hereFolded_ && openSections() == (hereFolded_ ? 0 : 1)) fold = false;
+  hereFolded_ = fold;
+  for (int k = 0; k < tree_->topLevelItemCount(); ++k) {
+    QTreeWidgetItem* it = tree_->topLevelItem(k);
+    if (!it->data(0, kSectionRole).toBool()) it->setHidden(fold);
+  }
+}
+
+// How many machines' sections are open: this one's (under the caption) and the others'.
+int Host::openSections() const {
+  int open = hereFolded_ ? 0 : 1;
+  for (int k = 0; k < tree_->topLevelItemCount(); ++k) {
+    QTreeWidgetItem* it = tree_->topLevelItem(k);
+    if (it->data(0, kSectionRole).toBool() && it->isExpanded()) ++open;
+  }
+  return open;
 }
 
 void Host::startMachine(const QString& tag) {

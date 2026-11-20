@@ -542,12 +542,12 @@ export async function readd(name: string, repo: string, log?: (s: string) => voi
   return peer;
 }
 
-export async function undelete(which: string, log?: (s: string) => void): Promise<{ name: string; recloned: string[]; missing: string[] }> {
+export async function undelete(which: string, log?: (s: string) => void): Promise<{ name: string; recloned: string[]; missing: string[]; leftOut: string[] }> {
   const p = restore(which);
-  const recloned: string[] = [], missing: string[] = [];
+  const recloned: string[] = [], missing: string[] = [], leftOut: string[] = [];
   const taken = p.peers.filter((x) => ownerOf(x.path, p.name));
   if (taken.length) {
-    for (const x of taken) missing.push(`${x.repo} (left out: ${ownedMsg(x.path, ownerOf(x.path, p.name)!)})`);
+    for (const x of taken) { const o = ownerOf(x.path, p.name)!; leftOut.push(`${x.repo}: ${o.project} has its folder (${o.repo}); to move it here, remove it there and Re-add it`); }
     save({ ...p, peers: p.peers.filter((x) => !taken.includes(x)), removed: [...(p.removed ?? []), ...taken.map((x) => ({ ...x, when: Date.now() }))] });
   }
   for (const peer of p.peers.filter((x) => !taken.includes(x))) {
@@ -560,7 +560,7 @@ export async function undelete(which: string, log?: (s: string) => void): Promis
     }
     missing.push(`${peer.repo} (${peer.path})`);
   }
-  return { name: p.name, recloned, missing };
+  return { name: p.name, recloned, missing, leftOut };
 }
 
 // A whole project in one go, as the MCP tool does it: create, add repos, lead with the

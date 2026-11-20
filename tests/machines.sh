@@ -39,7 +39,8 @@ send({ op: "connect", machine: "far", driver: env.FAR_DRIVER.split(" "), tmux: e
 await shows("the far tab", (x) => x.tabs.includes("far@far"));
 send({ op: "tab", tab: "far@far", focus: true }); // its panes are read from tmux once they are on screen
 const l = await shows("the far project as far@far, its panes live, next to near", (x) => x.tabs.includes("near") && x.tabs.includes("far@far") && x.terminals.filter((t) => t.tab === "far@far" && t.live && t.native).length === 2);
-if (!l.nodes.some((n) => n.label === "far@far")) fail("the tree should list far@far", l.nodes);
+// the far machine is a section of its own ("PROJECTS @ far"), its project under it
+if (!l.nodes.some((n) => n.id === "m:far" && n.label === "PROJECTS @ far") || !l.nodes.some((n) => n.id === "p:far@far" && n.label === "far")) fail("the tree should have a far section with the far project", l.nodes);
 // typing into a far pane reaches the far tmux
 const fp = l.terminals.find((t) => t.tab === "far@far");
 send({ op: "send", id: fp.id, text: "typed-far" });

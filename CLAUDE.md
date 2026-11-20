@@ -7,6 +7,9 @@
   spawnSync, no awaited fetch before a dialog opens. Show the dialog, load behind it, fill
   it in (the `fill` request), and keep the last result cached so it shows at once.
   The only waits allowed are at teardown, when the window is going away.
+- **A list with details is a table:** each detail a column, sortable by its header (the
+  form's `table` and `picker` formats: `columns`, `enumRows`, `sort`). Dates as
+  `YYYY-MM-DD HH:MM`, so they sort as text.
 - Comments: one or two lines, why not what; history goes in the commit message.
 - Nothing specific to one employer or person in this public repo: their profiles live in
   ~/.config/my-claude/profiles/.

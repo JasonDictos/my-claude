@@ -280,6 +280,10 @@ private:
   QHash<QString, QJsonArray> nodeActions_;
   QHash<QString, QTreeWidgetItem*> nodeItems_;
   QSet<QString> collapsed_;
+  class QLabel* caption_ = nullptr; // this machine's section header ("PROJECTS @ <host>")
+  bool hereFolded_ = false;
+  void foldHere(bool fold);
+  int openSections() const;
   void setTree(const QJsonArray& nodes);
   QString currentNode() const;
   void selectNode(const QString& id);

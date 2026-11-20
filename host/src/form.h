@@ -5,8 +5,10 @@
 #pragma once
 #include <QDialog>
 #include <QHash>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QList>
+#include <QSet>
 
 class QFormLayout;
 class QWidget;
@@ -18,7 +20,7 @@ public:
   // spec: {title, text, schema, values, ok, cancel}
   FormDialog(const QJsonObject& spec, QWidget* parent = nullptr);
   QJsonObject values() const;
-  void setChoices(const QString& key, const QJsonArray& choices, const QJsonArray& labels, const QString& note);
+  void setChoices(const QString& key, const QJsonArray& choices, const QJsonArray& labels, const QString& note, const QJsonArray& rows = {});
   void refilter(const QString& key);
   // Tests answer a dialog without driving its widgets.
   void answer(const QJsonObject& v) { answer_ = v; answered_ = true; accept(); }
@@ -30,6 +32,9 @@ private:
   struct Field { QString key, group, type; bool required = false; QWidget* widget = nullptr; };
   void addFields(QFormLayout* form, const QJsonObject& schema, const QJsonObject& values, const QString& group);
   QJsonValue read(const Field& f) const;
+  static void setupTable(class QTreeWidget* tw, const QJsonObject& p);
+  static QJsonArray rowsOf(const QJsonObject& p);
+  static void fillTable(class QTreeWidget* tw, const QJsonArray& choices, const QJsonArray& rows, const QString& cur, const QSet<QString>* ticked);
   QList<Field> fields_;
   QHash<QString, class QComboBox*> filters_; // list field -> the dropdown that filters it
   QJsonObject answer_;
