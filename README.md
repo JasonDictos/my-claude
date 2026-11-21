@@ -59,11 +59,15 @@ project and its peers (★ = lead).
 
 ## Install
 
-**Fedora (x86_64):** the RPM from the [latest release](https://github.com/JasonDictos/my-claude/releases)
-brings the window and everything it needs (tmux, Qt 6, qtermwidget):
+Packages from the [latest release](https://github.com/JasonDictos/my-claude/releases) bring
+the window and everything it needs (tmux, git, Qt 6, qtermwidget):
 
 ```bash
-sudo dnf install https://github.com/JasonDictos/my-claude/releases/download/v0.0.1-alpha/my-claude-0.0.1-0.1.alpha.fc44.x86_64.rpm
+# Fedora 44
+sudo dnf install https://github.com/JasonDictos/my-claude/releases/download/v0.0.2-alpha/my-claude-0.0.2-0.1.alpha.fc44.x86_64.rpm
+# Ubuntu 26.04 / Debian
+curl -LO https://github.com/JasonDictos/my-claude/releases/download/v0.0.2-alpha/my-claude_0.0.2-alpha_amd64.deb
+sudo apt install ./my-claude_0.0.2-alpha_amd64.deb
 ```
 
 Projects then live in `~/.local/share/my-claude`.
@@ -72,8 +76,9 @@ Projects then live in `~/.local/share/my-claude`.
 sends it over ssh into `~/.local` there, window included, no root needed (see
 [Other machines](#other-machines)).
 
-**From source** (any Linux; the window builds against Qt 6 and qtermwidget, or use the
-self-contained one from `packaging/static/build.sh`):
+**From source** (any Linux). For the window there, either build it against Qt 6 and
+qtermwidget (`my-claude gui --build`), or take the self-contained one from the release:
+`curl -Lo ~/.local/bin/mc-term https://github.com/JasonDictos/my-claude/releases/download/v0.0.2-alpha/mc-term-0.0.2-alpha-x86_64-linux && chmod +x ~/.local/bin/mc-term`.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/JasonDictos/my-claude/main/install.sh | bash

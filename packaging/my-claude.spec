@@ -47,13 +47,13 @@ install -Dm644 %{stage}/settings.example.json %{buildroot}%{_datadir}/my-claude/
 install -Dm644 %{stage}/README.md           %{buildroot}%{_docdir}/%{name}/README.md
 install -Dm644 %{stage}/PROTOCOL.md         %{buildroot}%{_docdir}/%{name}/PROTOCOL.md
 install -Dm644 %{stage}/my-claude.service  %{buildroot}%{_userunitdir}/my-claude.service
-%dir %{_sysconfdir}/my-claude
-%config(noreplace) %{_sysconfdir}/my-claude/settings.json
 install -Dm644 %{stage}/settings.json     %{buildroot}%{_sysconfdir}/my-claude/settings.json
 install -Dm644 %{stage}/LICENSE             %{buildroot}%{_datadir}/licenses/%{name}/LICENSE
 
 %files
 %license %{_datadir}/licenses/%{name}/LICENSE
+%dir %{_sysconfdir}/my-claude
+%config(noreplace) %{_sysconfdir}/my-claude/settings.json
 %doc %{_docdir}/%{name}
 %{_bindir}/my-claude
 %{_bindir}/mc-term
