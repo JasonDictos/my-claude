@@ -1,0 +1,9 @@
+<RCC><qresource prefix="/"><file>mc-term.svg</file>
+    <file>mc-term-256.png</file>
+    <file>mc-term-64.png</file>
+    <file>mc-term-32.png</file>
+    <file>mc-term-16.png</file>
+    <file>close.svg</file>
+    <file>close-hover.svg</file>
+    <file>console.svg</file>
+    <file>console-docker.svg</file></qresource></RCC>

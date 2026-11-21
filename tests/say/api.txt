@@ -1,0 +1,18 @@
+● Addressed the review on PR #42:
+
+  - Fixed (2): both findings in handlers/users.go. The "table full" error now
+    reaches the caller, and the nil check is on the right pointer. Handler and
+    pool tests pass on the rebuilt tree (16 of 16).
+  - Answered (1): the branch pin is deliberate while the PR is a draft against
+    web#17 and gets swapped for the release tag before it's marked ready.
+  - Skipped: the two linter comments, which are passes.
+
+  Replied to both inline comments, resolved both threads, re-requested review.
+
+  Pushed commit e58b712 "v2 API: review fixes in the handler setup".
+
+  One consequence for the staging trial: the image still pushing was built one
+  commit behind. The two commits differ only in that log line, so it's still a
+  fair test of the handler layer; say if you'd rather I rebuild it first.
+
+✻ 1 message hidden (/focus to show) · 1 shell still running

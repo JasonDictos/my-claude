@@ -1,0 +1,46 @@
+{
+  "name": "my-claude",
+  "version": "0.0.2-alpha",
+  "private": true,
+  "type": "module",
+  "description": "One long-lived Claude Code session per repo, grouped into projects: a native window (or tmux), a daemon that keeps them up, and every machine you can ssh to in one window.",
+  "bin": {
+    "my-claude": "src/cli.ts"
+  },
+  "scripts": {
+    "test": "tests/smoke.sh",
+    "build": "bun build --compile src/cli.ts --outfile dist/my-claude",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "ink": "^5.2.1",
+    "react": "^18.3.1",
+    "ssh2": "1.16.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^18.3.12",
+    "bun-types": "^1.3.0",
+    "typescript": "^5.7.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/JasonDictos/my-claude.git"
+  },
+  "license": "MIT",
+  "author": "Jason Dictos",
+  "homepage": "https://github.com/JasonDictos/my-claude",
+  "bugs": {
+    "url": "https://github.com/JasonDictos/my-claude/issues"
+  },
+  "keywords": [
+    "claude-code",
+    "claude",
+    "ai-agents",
+    "tmux",
+    "terminal",
+    "qt6",
+    "ssh",
+    "multi-agent"
+  ]
+}

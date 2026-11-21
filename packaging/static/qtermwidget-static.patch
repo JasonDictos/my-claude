@@ -1,0 +1,62 @@
+diff -ruN a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt	2026-11-19 21:34:20.602435062 -0800
++++ b/CMakeLists.txt	2026-11-19 21:53:41.008770962 -0800
+@@ -36,7 +36,7 @@
+ set(LXQTBT_MINIMUM_VERSION "2.4.0")
+ 
+ find_package(Qt6Widgets "${QT_MINIMUM_VERSION}" REQUIRED)
+-find_package(Qt6LinguistTools "${QT_MINIMUM_VERSION}" REQUIRED)
++find_package(Qt6LinguistTools "${QT_MINIMUM_VERSION}" QUIET) # translations: optional (a static build has none)
+ find_package(lxqt2-build-tools ${LXQTBT_MINIMUM_VERSION} REQUIRED)
+ 
+ if(USE_UTF8PROC)
+@@ -44,7 +44,9 @@
+ endif()
+ 
+ include(LXQtPreventInSourceBuilds)
+-include(LXQtTranslateTs)
++if(Qt6LinguistTools_FOUND)
++    include(LXQtTranslateTs)
++endif()
+ include(LXQtCompilerSettings NO_POLICY_SCOPE)
+ include(LXQtCreatePkgConfigFile)
+ 
+@@ -134,6 +136,7 @@
+ qt6_wrap_ui(UI_SRCS ${UI})
+ set(PKG_CONFIG_REQ "Qt6Widgets")
+ 
++if(Qt6LinguistTools_FOUND)
+ lxqt_translate_ts(QTERMWIDGET_QM
+     TRANSLATION_DIR "lib/translations"
+     UPDATE_TRANSLATIONS
+@@ -145,8 +148,9 @@
+     COMPONENT
+         Runtime
+ )
++endif()
+ 
+-add_library(${QTERMWIDGET_LIBRARY_NAME} SHARED ${SRCS} ${MOCS} ${UI_SRCS} ${QTERMWIDGET_QM})
++add_library(${QTERMWIDGET_LIBRARY_NAME} ${SRCS} ${MOCS} ${UI_SRCS} ${QTERMWIDGET_QM})
+ target_link_libraries(${QTERMWIDGET_LIBRARY_NAME} Qt6::Widgets)
+ set_target_properties( ${QTERMWIDGET_LIBRARY_NAME} PROPERTIES
+                        SOVERSION ${QTERMWIDGET_VERSION_MAJOR}
+diff -ruN a/lib/tools.cpp b/lib/tools.cpp
+--- a/lib/tools.cpp	2026-11-19 21:34:20.601933684 -0800
++++ b/lib/tools.cpp	2026-11-19 21:34:20.628751129 -0800
+@@ -16,6 +16,8 @@
+ //    qDebug() << __FILE__ << __FUNCTION__;
+ 
+     QString rval = QString();
++    // a self-contained build: its data unpacked at run time, where QTERMWIDGET_DATA_DIR says
++    if (!qEnvironmentVariableIsEmpty("QTERMWIDGET_DATA_DIR")) return qEnvironmentVariable("QTERMWIDGET_DATA_DIR") + QLatin1String("/kb-layouts/");
+     QString k(QLatin1String(KB_LAYOUT_DIR));
+     QDir d(k);
+ 
+@@ -62,6 +64,7 @@
+ //    qDebug() << __FILE__ << __FUNCTION__;
+ 
+     QStringList rval;
++    if (!qEnvironmentVariableIsEmpty("QTERMWIDGET_DATA_DIR")) return QStringList{qEnvironmentVariable("QTERMWIDGET_DATA_DIR") + QLatin1String("/color-schemes/")};
+     QString k(QLatin1String(COLORSCHEMES_DIR));
+     QDir d(k);
+ 

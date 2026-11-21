@@ -1,0 +1,11 @@
+# runtime data: project records live here, not in git
+projects/
+node_modules/
+.history.json
+.cache/
+.trash/
+dist/
+host/build/
+# per-directory Claude Code state
+.claude/session.lock
+.claude/settings.local.json

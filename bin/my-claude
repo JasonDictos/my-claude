@@ -1,0 +1,14 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Jason Dictos - my-claude, https://github.com/JasonDictos/my-claude
+# my-claude entry point usable everywhere: bun on the source when bun is around (the
+# host), else the compiled binary (dev containers, where only the home dir is shared).
+self=$(readlink -f "$0" 2>/dev/null || echo "$0") # through a symlink (install.sh links ~/.local/bin to it)
+root=$(cd "$(dirname "$self")/.." && pwd)
+export MY_CLAUDE_ROOT="${MY_CLAUDE_ROOT:-$root}"
+# tmux run-shell (status-bar clicks) has a bare PATH, so look in bun's install dir too.
+for b in bun "$HOME/.bun/bin/bun"; do
+  command -v "$b" >/dev/null 2>&1 && exec "$b" "$root/src/cli.ts" "$@"
+done
+[ -x "$root/dist/my-claude" ] || { echo "my-claude: no bun here and no $root/dist/my-claude (run 'bun run build' on the host)" >&2; exit 127; }
+exec "$root/dist/my-claude" "$@"
