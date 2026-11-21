@@ -43,7 +43,7 @@ back on the same conversations after the containers, tmux or the machine itself 
 
 <p align="center">
   <img src="docs/gui.png" alt="the native window: a project as a tab, four peers and a shell as panes, the project tree on the left">
-  <br><sub>The native window: <code>api-overhaul</code> is a tab, each repo's Claude a pane, a shell on <code>web</code> beside them. The tree lists every project; ! asks for you, ✉ has news.</sub>
+  <br><sub>The native window: <code>api-overhaul</code> is a tab, each repo's Claude a pane, a host shell on <code>web</code> beside them. The list groups the projects by machine, with the operations over it; ! asks for you, ✉ has finished its turn.</sub>
 </p>
 
 And the same projects in tmux, for when a terminal is all there is:
@@ -235,6 +235,10 @@ tests/gui-demo.sh          # try it in a sandbox: temp HOME, fake claude, privat
 - **F1** shows a bar of every key for what has the focus; holding it labels each part of
   the window with its keys. **Alt** brings back a hidden menu bar (right-click the bar or
   the PROJECTS caption: Persist menu bar).
+- **The overview** (`Meta+Shift+W`): every open terminal at once, live; click one to go there.
+
+  <img src="docs/overview.png" alt="the overview: every terminal at once" width="720">
+
 - **Dropdown mode** (Settings → Window, Guake style): the window is always full screen,
   hides when another window takes the focus, and Ctrl+Alt+T brings it back.
 - **Scrollback is unlimited** by default and lives on disk
@@ -263,6 +267,7 @@ Keys, all changeable in Settings → Shortcuts (stored as `gui.keys` in `setting
 | `Shift+PgUp/PgDn`, the wheel | scroll |
 | `F1` (hold it: on the window) | every key |
 | `F11`, `Ctrl+Shift+Q` | full screen, quit |
+| `Meta+Shift+W` | the overview: every terminal at once |
 | `Ctrl+Alt+T` (anywhere, after `--install`) | show the window in front, or hide it |
 
 Settings (my-claude → Settings…, or `gui` in `settings.json`): `font`, `fontSize`,

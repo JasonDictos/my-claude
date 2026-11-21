@@ -29,6 +29,9 @@ mc lead api-overhaul api "Move web and worker onto the v2 API; keep the old endp
 mc new docs-refresh --color green >/dev/null; mc add docs-refresh ~/src/docs >/dev/null
 mc up api-overhaul --no-attach >/dev/null
 
+# shots press keys (the overview's) through the window's test request
+[[ "${1:-}" == shot ]] && export MC_TERM_TEST=1
+export MC_TERM_HOSTNAME=workstation # not this machine's name, in public pictures
 "$bin" --socket "$MC_TERM_SOCKET" --driver "bun $MY_CLAUDE_ROOT/src/cli.ts _gui" &
 host=$!
 if [[ "${1:-}" != shot ]]; then wait $host; exit 0; fi
@@ -43,8 +46,10 @@ mkdir -p "$MY_CLAUDE_ROOT/projects/api-overhaul/.attn"; printf ask > "$MY_CLAUDE
 sleep 2.5; grab 1-project
 act '{"ev":"action","action":"peer.shell","node":"r:api-overhaul/web"}'; sleep 3; grab 2-shell
 say '{"op":"sidebar"}'; sleep 0.5; grab 3-sidebar-focus
-act '{"ev":"action","action":"app.new"}'; sleep 1.2; grab 4-new-project-dialog
-say '{"op":"emit","event":{"ev":"settings-open"}}'; sleep 1.2; grab 5-settings
+say '{"op":"sidebar"}'; say '{"op":"key","keys":"Meta+Shift+W"}'; sleep 2.5; grab 4-overview
+say '{"op":"key","keys":"Escape"}'; sleep 0.5
+act '{"ev":"action","action":"app.new"}'; sleep 1.2; grab 5-new-project-dialog
+say '{"op":"emit","event":{"ev":"settings-open"}}'; sleep 1.2; grab 6-settings
 say '{"op":"quit"}'
 wait $host || true
 ls -la "$out"

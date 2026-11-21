@@ -11,7 +11,7 @@ export TMUX_TMPDIR=$tmp; unset TMUX
 export MY_CLAUDE_ROOT=$tmp/root MY_CLAUDE_CONFIG_DIR=$tmp/cfg MY_CLAUDE_CLAUDE=$here/fake-claude FAKE_CLAUDE_LOG=$tmp/claude.log FAKE_CLAUDE_SAY=$here/say HOME=$tmp/home
 mkdir -p "$MY_CLAUDE_ROOT" "$MY_CLAUDE_CONFIG_DIR" "$HOME" "$HOME/src"
 ln -s "$repo/src" "$MY_CLAUDE_ROOT/src"; ln -s "$repo/bin" "$MY_CLAUDE_ROOT/bin"; ln -s "$repo/node_modules" "$MY_CLAUDE_ROOT/node_modules"
-echo '{"profile":"host","peers":{"cli":"/nonexistent"}}' > "$MY_CLAUDE_CONFIG_DIR/settings.json"
+echo '{"profile":"host","peers":{"cli":"/nonexistent"},"shell":{"login":false}}' > "$MY_CLAUDE_CONFIG_DIR/settings.json"
 for r in api web worker docs; do
   mkdir -p "$HOME/src/$r"; git -C "$HOME/src/$r" init -q -b main
   for m in "scaffold" "wire the v2 client" "review fixes"; do git -C "$HOME/src/$r" -c user.name=demo -c user.email=demo@example.com commit -q --allow-empty -m "$m"; done
@@ -98,7 +98,7 @@ fi
 
 # docs/screenshot.png, after the gifs (or alone: tests/demo.sh shot): a project session in
 # use, side panel, one Claude per repo, a prefix+h shell, the status bar.
-mc new search-rewrite --color purple >/dev/null; mc add search-rewrite ~/src/api >/dev/null
+mkdir -p ~/src/search && git -C ~/src/search init -q -b main; mc new search-rewrite --color purple >/dev/null; mc add search-rewrite ~/src/search >/dev/null
 record shot 200 50 "env -u TMUX MY_CLAUDE_ROOT=$MY_CLAUDE_ROOT MY_CLAUDE_CONFIG_DIR=$MY_CLAUDE_CONFIG_DIR bun $MY_CLAUDE_ROOT/src/cli.ts attach api-overhaul"
 sleep 3
 # the prefix+h shell pane on api: a host shell here, titled like the real one

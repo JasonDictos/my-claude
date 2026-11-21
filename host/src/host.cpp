@@ -2958,7 +2958,7 @@ QStringList Host::tmuxFor(const QString& key, QString* session) const {
 void Host::rebuildTree() {
   // a section per machine: this one's projects under the caption, each other machine's
   // under a "PROJECTS @ <machine>" row that folds
-  const QString here = remote_.isEmpty() ? QSysInfo::machineHostName().section('.', 0, 0) : remote_.section('@', -1);
+  const QString here = remote_.isEmpty() ? qEnvironmentVariable("MC_TERM_HOSTNAME", QSysInfo::machineHostName().section('.', 0, 0)) : remote_.section('@', -1);
   if (caption_) caption_->setText(here.isEmpty() ? QString("PROJECTS") : "PROJECTS @ <b style='color:#ffffff'>" + here.toHtmlEscaped() + "</b>");
   QJsonArray all = localTree_;
   for (const Machine& mc : machines_) {
