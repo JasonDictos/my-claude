@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Docker with terminal indicator" shape-rendering="geometricPrecision">
+
+<rect x="3" y="4" width="58" height="56" fill="#A6C2C4" stroke="#25313A" stroke-width="2" />
+<path d="M5 6H59V9H5Z" fill="#DDEFE9" /><path d="M5 9H59V15H5Z" fill="#1D4854" />
+<path d="M6 16H58V57H6Z" fill="#0C1A23" /><path d="M6 57H58" stroke="#48616B" stroke-width="2" />
+<path d="M8 11H33" stroke="#31FBE2" stroke-width="2" /><rect x="54" y="11" width="3" height="2" fill="#90BAB9" />
+
+<g fill="#31FBE2">
+<rect x="16" y="29" width="7" height="6" /><rect x="24" y="29" width="7" height="6" /><rect x="32" y="29" width="7" height="6" /><rect x="40" y="29" width="7" height="6" />
+<rect x="20" y="22" width="7" height="6" /><rect x="28" y="22" width="7" height="6" /><rect x="36" y="22" width="7" height="6" />
+<rect x="28" y="16" width="7" height="5" />
+</g>
+<g opacity=".25" stroke="#0C1A23" stroke-width=".65"><path d="M18 30V34M26 30V34M34 30V34M42 30V34M22 23V27M30 23V27M38 23V27" /></g>
+
+<path d="M9 37H43C45.9 37 48.4 35.4 49.6 33.8C51.0 31.9 51.2 29.9 51.5 28.7C53.0 30.7 54.8 31.6 57 31.8C56.2 35.6 53.8 39 50.2 41.2C48.9 42 47 42.8 44.9 43.1H40.1C38.1 48.7 33.2 53 25.5 53.7C18.3 54.3 12.1 51.1 9 47.3C6.6 44.4 6.8 39.7 9 37Z" fill="#31FBE2" />
+<path d="M11 39H42" stroke="#0C1A23" stroke-width="1.2" opacity=".38" />
+<rect x="15" y="42" width="2.5" height="2.5" fill="#0C1A23" opacity=".45" />
+
+<rect x="48" y="17" width="11" height="10" fill="#0C1A23" stroke="#31FBE2" stroke-width="1.25" />
+<path d="M50.2 20L52.5 22L50.2 24" fill="none" stroke="#31FBE2" stroke-width="1.35" stroke-linecap="square" />
+<path d="M53.5 24.2H56" stroke="#31FBE2" stroke-width="1.2" />
+<svg viewBox="0 0 24 24" width="24" height="24" role="img" aria-label="Claude provider badge" shape-rendering="geometricPrecision" x="39" y="39">
+<circle cx="12" cy="12" r="11.1" fill="#F9F6F2" stroke="#25313A" stroke-width="1.55" />
+<g stroke="#D97757" stroke-linecap="round" stroke-width="2.0">
+<path d="M12 4.0V9.1M12 14.9V20.0M4 12H9.1M14.9 12H20" />
+<path d="M6.3 6.3L9.9 9.9M14.1 14.1L17.7 17.7M17.7 6.3L14.1 9.9M9.9 14.1L6.3 17.7" />
+<path d="M8.9 4.7L10.8 9.4M13.2 14.6L15.1 19.3M4.7 8.9L9.4 10.8M14.6 13.2L19.3 15.1M15.1 4.7L13.2 9.4M10.8 14.6L8.9 19.3M19.3 8.9L14.6 10.8M9.4 13.2L4.7 15.1" stroke-width="1.45" />
+</g>
+<circle cx="12" cy="12" r="2.0" fill="#D97757" />
+</svg></svg>

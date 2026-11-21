@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Console" shape-rendering="geometricPrecision">
+  <rect x="5" y="5" width="54" height="54" fill="#A6C2C4" stroke="#25313A" stroke-width="2" />
+  <path d="M7 7 H57 V10 H7 Z" fill="#DDEFE9" />
+  <path d="M7 10 H57 V19 H7 Z" fill="#1D4854" />
+  <path d="M8 20 H56 V56 H8 Z" fill="#0C1A23" />
+  <path d="M8 55 H56" stroke="#48616B" stroke-width="2" />
+  <path d="M9 11 H34" stroke="#31FBE2" stroke-width="2" opacity="0.9" />
+  <rect x="45" y="12" width="4" height="4" fill="#90BAB9" />
+  <rect x="51" y="12" width="4" height="4" fill="#90BAB9" />
+
+  
+  <path d="M16 31 L25 37 L16 43" fill="none" stroke="#31FBE2" stroke-width="4" stroke-linecap="square" stroke-linejoin="miter" />
+  <path d="M30 46 H42" stroke="#31FBE2" stroke-width="4" stroke-linecap="square" />
+
+  
+  <path d="M31 30 H48" stroke="#31FBE2" stroke-width="1.7" opacity="0.55" />
+  <path d="M31 34 H45" stroke="#31FBE2" stroke-width="1.7" opacity="0.35" />
+  <path d="M31 38 H41" stroke="#31FBE2" stroke-width="1.7" opacity="0.25" />
+<svg viewBox="0 0 24 24" width="24" height="24" role="img" aria-label="Claude provider badge" shape-rendering="geometricPrecision" x="39" y="39">
+<circle cx="12" cy="12" r="11.1" fill="#F9F6F2" stroke="#25313A" stroke-width="1.55" />
+<g stroke="#D97757" stroke-linecap="round" stroke-width="2.0">
+<path d="M12 4.0V9.1M12 14.9V20.0M4 12H9.1M14.9 12H20" />
+<path d="M6.3 6.3L9.9 9.9M14.1 14.1L17.7 17.7M17.7 6.3L14.1 9.9M9.9 14.1L6.3 17.7" />
+<path d="M8.9 4.7L10.8 9.4M13.2 14.6L15.1 19.3M4.7 8.9L9.4 10.8M14.6 13.2L19.3 15.1M15.1 4.7L13.2 9.4M10.8 14.6L8.9 19.3M19.3 8.9L14.6 10.8M9.4 13.2L4.7 15.1" stroke-width="1.45" />
+</g>
+<circle cx="12" cy="12" r="2.0" fill="#D97757" />
+</svg></svg>

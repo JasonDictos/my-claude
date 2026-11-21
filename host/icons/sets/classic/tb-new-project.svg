@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="New project workspace" shape-rendering="geometricPrecision">
+  <!-- my-claude project: a Win9x folder containing a multi-session workspace -->
+  <!-- Classic gold folder back -->
+  <path d="M5 17 V12 H20 L26 18 H55 V52 H5 Z" fill="#E3A833" stroke="#36424A" stroke-width="2" stroke-linejoin="miter" />
+  <path d="M7 14 H19 L25 20 H53 V23 H7 Z" fill="#FFF0A8" />
+  <path d="M6 23 H56 V53 H6 Z" fill="#F4C34A" stroke="#36424A" stroke-width="2" />
+  <path d="M8 25 H54 V28 H8 Z" fill="#FFF6C6" />
+  <path d="M8 29 H54 V49 H8 Z" fill="#FFDA69" />
+  <!-- Two offset sessions suggest multiple terminals/repos/checkouts -->
+  <path d="M18 21 H52 V46 H18 Z" fill="#809FA4" stroke="#25313A" stroke-width="2" />
+  <path d="M21 23 H49 V27 H21 Z" fill="#1D4854" />
+  <path d="M21 28 H49 V43 H21 Z" fill="#0C1A23" />
+  <!-- Main project workspace window -->
+  <rect x="11" y="26" width="42" height="28" fill="#A6C2C4" stroke="#25313A" stroke-width="2" />
+  <path d="M13 28 H51 V33 H13 Z" fill="#1D4854" />
+  <path d="M14 30 H33" stroke="#31FBE2" stroke-width="1.7" />
+  <rect x="43" y="29" width="3" height="3" fill="#90BAB9" />
+  <rect x="48" y="29" width="2" height="3" fill="#90BAB9" />
+  <rect x="13" y="34" width="38" height="18" fill="#0C1A23" />
+  <!-- terminal prompt -->
+  <path d="M18 39 L23 43 L18 47" fill="none" stroke="#31FBE2" stroke-width="2.7" stroke-linecap="square" stroke-linejoin="miter" />
+  <path d="M25 48 H30" stroke="#31FBE2" stroke-width="2.7" stroke-linecap="square" />
+  <!-- repository branch / checkout tree -->
+  <path d="M37 39 V48 M37 41 H44 V46" fill="none" stroke="#31FBE2" stroke-width="2" stroke-linecap="square" />
+  <rect x="35" y="37" width="4" height="4" fill="#31FBE2" />
+  <rect x="35" y="46" width="4" height="4" fill="#31FBE2" />
+  <rect x="42" y="44" width="4" height="4" fill="#31FBE2" />
+  <!-- Squared turquoise add badge, anchored to lower-right toolbar corner -->
+  <rect x="42" y="42" width="20" height="20" rx="3" fill="#091821" stroke="#DDEFE9" stroke-width="1.4" />
+  <rect x="44" y="44" width="16" height="16" rx="1" fill="#31FBE2" />
+  <path d="M52 47 V57 M47 52 H57" fill="none" stroke="#0C1A23" stroke-width="3" stroke-linecap="square" />
+</svg>

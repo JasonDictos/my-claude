@@ -246,6 +246,8 @@ tests/gui-demo.sh          # try it in a sandbox: temp HOME, fake claude, privat
   size it from its corner, minimise it to its title or maximise it. Closing the panel only
   takes it off that project; the consoles live on (in tmux, `my-claude-consoles`).
   Pinned, the panel shows over every project. The list has one Consoles entry per machine.
+- **It opens as you left it:** the project in front, the pane with the keyboard, zoomed and
+  minimised panes, the consoles' panel (kept in `~/.config/my-claude/mc-term.conf`).
 - **The overview** (`Meta+Shift+W`): every open terminal at once, live; click one to go there.
 
   <img src="docs/overview.png" alt="the overview: every terminal at once" width="720">
@@ -286,7 +288,8 @@ global shortcuts) is refused, since it would never reach the window. Stored as `
 | `Meta+Shift+W` | the overview: every terminal at once |
 | `Ctrl+Alt+T` (anywhere, after `--install`) | show the window in front, or hide it |
 
-Settings (my-claude → Settings…, or `gui` in `settings.json`): `font`, `fontSize`,
+Settings (my-claude → Settings…, or `gui` in `settings.json`): `iconSet` (`v2`, `classic`, or
+a folder of SVGs in `~/.config/my-claude/icons/<name>/`), `font`, `fontSize`,
 `scheme` (a named qtermwidget scheme instead of the tinted one), `tint` (0-100),
 `alternate`, `transparency` (0-95, with `blur`), `panesPerGroup`, `scrollback` (0:
 unlimited), `seedLines` (how much of tmux's scrollback a pane starts with, 50000),

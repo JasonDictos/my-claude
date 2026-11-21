@@ -15,7 +15,7 @@ import { profile, profiles } from "./profiles/index.ts";
 import { REMOTE_PATH } from "./remote.ts";
 import { lockInfo, occupantPid, whoOf } from "./live.ts";
 import type { ProfileAction } from "./profiles/types.ts";
-import { PROJECTS, ROOT, UsageError, config, daemonSettings, defaultProfile, saveConfig, slug, type Trashed } from "./store.ts";
+import { CONFIG_DIR, PROJECTS, ROOT, UsageError, config, daemonSettings, defaultProfile, saveConfig, slug, type Trashed } from "./store.ts";
 import { adoptShellEnv, out, sh, shOk } from "./sh.ts";
 
 type Dict = Record<string, any>;
@@ -301,6 +301,11 @@ interface Target { name: string | null; repo: string | null; pane: string | null
 const DOT_YELLOW = "#ffd75f", DOT_RED = "#ff5f5f";
 const SHELL_COLOR = "#9aa0a6", CHAT_COLOR = "#d7af5f";
 const attnBadge = (a: Attention) => attentionMark(a).trim();
+// Icon sets: the window's own, and folders of the user's (to try a revision without a build).
+const iconSets = (): string[] => {
+  const mine = (() => { try { return readdirSync(join(CONFIG_DIR, "icons"), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort(); } catch { return []; } })();
+  return [...new Set(["v2", "classic", ...mine])];
+};
 // One spelling per key ("ctrl+shift+n", "Shift+Ctrl+N": the same), to compare keys by.
 export const normKey = (k: string): string => {
   const s = k.trim().toLowerCase().replace(/\s+/g, "");
@@ -705,7 +710,7 @@ class Driver {
       return {
         // greyed while its Claude is not running here
         // a terminal like its shells (docker or not); a plain folder (a home directory) shows its path
-        id: `r:${name}/${peer.repo}`, label: (peer.label || (isRepo(peer.path) ? peer.repo : `${tilde(peer.path)}/`)) + (peer.repo === p.lead ? " ★" : ""), icon: boxed ? "container" : "terminal",
+        id: `r:${name}/${peer.repo}`, label: (peer.label || (isRepo(peer.path) ? peer.repo : `${tilde(peer.path)}/`)) + (peer.repo === p.lead ? " ★" : ""), icon: boxed ? "container-claude" : "terminal-claude",
         name: peer.label || (isRepo(peer.path) ? peer.repo : `${tilde(peer.path)}/`),
         can: [...projectCan, ...(peer.state === "live" ? ["pane.shell"] : []), ...(s.up ? ["pane.hostshell"] : [])],
         dim: peer.state === "down" || peer.state === "occupied",
@@ -722,7 +727,7 @@ class Driver {
     };
     const chat = s.panes.find((x) => tmux.label(x) === `chat:${name}`);
     return {
-      id: `p:${name}`, label: p.label || name, name: p.label || name, color: s.color, can: projectCan,
+      id: `p:${name}`, label: p.label || name, name: p.label || name, icon: "project", color: s.color, can: projectCan,
       badge: attnBadge(s.attn), badgeColor: attnColor(s.attn), actions,
       tooltip: [p.goal ? `Goal: ${p.goal.split("\n")[0].slice(0, 160)}` : "", p.ticket ? `Ticket: ${p.ticket}` : "", `${p.mode === "shared" ? "one shared container" : "a container per repo"} · profile ${p.profile} · ${s.state}`].filter(Boolean).join("\n"),
       children: [...s.peers.map(peerNode), ...(chat ? [{ id: `t:${name}/${chat.id}`, label: "chat", color: CHAT_COLOR, actions: [act("pane.focus", "Go to it"), act("pane.close", "Leave the chat…", "x")] }] : [])],
@@ -808,7 +813,9 @@ class Driver {
           description: `${this.sshWho ? `ssh reaches GitHub as ${this.sshWho}.` : "ssh does not reach GitHub with a key yet."} Clones fall back to git@github.com with it when https cannot.` },
         panesPerWindow: { type: "integer", title: "Panes per window (terminal UI)", minimum: 1, maximum: 16, default: 6 },
         panel: { type: "boolean", title: "Side panel (terminal UI)", default: true } } },
-      window: { type: "object", title: "Window", order: ["font", "fontSize", "scheme", "tint", "alternate", "transparency", "blur", "panesPerGroup", "scrollback", "copyOnSelect", "panes", "openOnStart", "dropdown", "keepSolo"], properties: {
+      window: { type: "object", title: "Window", order: ["iconSet", "font", "fontSize", "scheme", "tint", "alternate", "transparency", "blur", "panesPerGroup", "scrollback", "copyOnSelect", "panes", "openOnStart", "dropdown", "keepSolo"], properties: {
+        iconSet: { type: "string", title: "Icons", enum: iconSets(), default: "v2",
+          description: `Built in: v2 (an agent's icon carries its badge), classic. Another set: a folder of SVGs in ${tilde(join(CONFIG_DIR, "icons"))}/<name>/ (console, docker, console-claude, docker-claude, project, tb-new-project); what it lacks comes from the built-in ones.` },
         font: { type: "string", title: "Terminal font", placeholder: "qterminal's" },
         fontSize: { type: "integer", title: "Font size", minimum: 0, maximum: 48, default: 0, description: "0: qterminal's" },
         ...(schemes.length ? { scheme: { type: "string", title: "Colour scheme", enum: ["", ...schemes], enumLabels: ["my-claude's: each project's colour in its terminals", ...schemes] } } : {}),
@@ -826,7 +833,7 @@ class Driver {
     };
     const values: Dict = {
       general: { profile: cfg.profile ?? "host", defaultOrg: cfg.clone?.defaultOrg ?? "", sshKey: cfg.clone?.sshKey ?? "", chatName: cfg.chat?.name ?? "", peersCli: cfg.peers?.cli ?? "", historyLimit: cfg.historyLimit === undefined ? 50000 : Number(cfg.historyLimit) || 0, panesPerWindow: Number(cfg.panesPerWindow) || 6, panel: cfg.panel !== false },
-      window: { font: cfg.gui?.font ?? "", fontSize: Number(cfg.gui?.fontSize) || 0, scheme: cfg.gui?.scheme ?? "", tint: cfg.gui?.tint === undefined ? 35 : Number(cfg.gui.tint) || 0, alternate: cfg.gui?.alternate !== false, hosts: Object.entries((cfg.gui?.hosts ?? {}) as Record<string, { dest?: string; port?: number }>).map(([n, h]) => `${n} ${h.dest}${h.port ? `:${h.port}` : ""}`).join("\n"), transparency: Number(cfg.gui?.transparency) || 0, blur: cfg.gui?.blur !== false, panesPerGroup: Number(cfg.gui?.panesPerGroup) || 4, scrollback: Number(cfg.gui?.scrollback) || 0, copyOnSelect: cfg.gui?.copyOnSelect !== false, dropdown: cfg.gui?.dropdown === true, panes: cfg.gui?.panes === "view" ? "view" : "native", openOnStart: cfg.gui?.openOnStart !== false, keepSolo: cfg.gui?.keepSolo === true },
+      window: { iconSet: String(cfg.gui?.iconSet ?? "v2"), font: cfg.gui?.font ?? "", fontSize: Number(cfg.gui?.fontSize) || 0, scheme: cfg.gui?.scheme ?? "", tint: cfg.gui?.tint === undefined ? 35 : Number(cfg.gui.tint) || 0, alternate: cfg.gui?.alternate !== false, hosts: Object.entries((cfg.gui?.hosts ?? {}) as Record<string, { dest?: string; port?: number }>).map(([n, h]) => `${n} ${h.dest}${h.port ? `:${h.port}` : ""}`).join("\n"), transparency: Number(cfg.gui?.transparency) || 0, blur: cfg.gui?.blur !== false, panesPerGroup: Number(cfg.gui?.panesPerGroup) || 4, scrollback: Number(cfg.gui?.scrollback) || 0, copyOnSelect: cfg.gui?.copyOnSelect !== false, dropdown: cfg.gui?.dropdown === true, panes: cfg.gui?.panes === "view" ? "view" : "native", openOnStart: cfg.gui?.openOnStart !== false, keepSolo: cfg.gui?.keepSolo === true },
     };
     sections.remote = { type: "object", title: "Remote", description: "Other machines' projects in a window here, over ssh. The other machine needs my-claude and tmux; its daemon's own ssh port (2222) or its sshd will do.", order: ["hosts"], properties: {
         hosts: { type: "string", format: "multiline", title: "Machines", description: "One per line: a name, then user@host[:port]. Each one's projects join this window when it is connected (the Connect menu), and it gets a \"my-claude <name>\" launcher in the application menu. Example: server you@server:2222" },
@@ -887,7 +894,7 @@ class Driver {
       historyLimit: Number(g.historyLimit) === 50000 ? null : Math.max(0, Number(g.historyLimit) || 0),
       panesPerWindow: Number(g.panesPerWindow) === 6 ? null : Number(g.panesPerWindow) || null,
       panel: g.panel === false ? false : null,
-      gui: { ...(keyRows ? { keys, keysOff: keysOff?.length ? keysOff : null } : {}), font: blank(w.font), fontSize: Number(w.fontSize) || null, scheme: blank(w.scheme), tint: w.tint === undefined || Number(w.tint) === 35 ? null : Math.max(0, Math.min(100, Number(w.tint) || 0)), alternate: w.alternate === false ? false : null, transparency: Number(w.transparency) > 0 ? Math.min(95, Number(w.transparency)) : null, blur: w.blur === false ? false : null, panesPerGroup: !Number(w.panesPerGroup) || Number(w.panesPerGroup) === 4 ? null : Math.max(1, Math.min(16, Number(w.panesPerGroup))), scrollback: Number(w.scrollback) > 0 ? Number(w.scrollback) : null, copyOnSelect: w.copyOnSelect === false ? false : null, panes: w.panes === "view" ? "view" : null, openOnStart: w.openOnStart === false ? false : null, dropdown: w.dropdown === true ? true : null, keepSolo: w.keepSolo === true ? true : null },
+      gui: { ...(keyRows ? { keys, keysOff: keysOff?.length ? keysOff : null } : {}), iconSet: !w.iconSet || w.iconSet === "v2" ? null : String(w.iconSet), font: blank(w.font), fontSize: Number(w.fontSize) || null, scheme: blank(w.scheme), tint: w.tint === undefined || Number(w.tint) === 35 ? null : Math.max(0, Math.min(100, Number(w.tint) || 0)), alternate: w.alternate === false ? false : null, transparency: Number(w.transparency) > 0 ? Math.min(95, Number(w.transparency)) : null, blur: w.blur === false ? false : null, panesPerGroup: !Number(w.panesPerGroup) || Number(w.panesPerGroup) === 4 ? null : Math.max(1, Math.min(16, Number(w.panesPerGroup))), scrollback: Number(w.scrollback) > 0 ? Number(w.scrollback) : null, copyOnSelect: w.copyOnSelect === false ? false : null, panes: w.panes === "view" ? "view" : null, openOnStart: w.openOnStart === false ? false : null, dropdown: w.dropdown === true ? true : null, keepSolo: w.keepSolo === true ? true : null },
     };
     for (const [k, section] of Object.entries(v)) {
       if (!k.startsWith("profile:")) continue;
@@ -920,7 +927,8 @@ class Driver {
   }
   private applyLook(cfg: Dict): void {
     const g = cfg.gui ?? {};
-    this.send({ op: "look", scrollback: Number(g.scrollback) > 0 ? Number(g.scrollback) : -1, copyOnSelect: g.copyOnSelect !== false, dropdown: g.dropdown === true, clipboardFromPrograms: g.clipboardFromPrograms !== false,
+    const set = String(g.iconSet ?? "v2"), dir = join(CONFIG_DIR, "icons", set);
+    this.send({ op: "look", iconSet: set, iconDir: existsSync(dir) ? dir : "", scrollback: Number(g.scrollback) > 0 ? Number(g.scrollback) : -1, copyOnSelect: g.copyOnSelect !== false, dropdown: g.dropdown === true, clipboardFromPrograms: g.clipboardFromPrograms !== false,
       seedLines: Math.max(0, Math.min(2000000, g.seedLines === undefined ? 50000 : Number(g.seedLines) || 0)),
       perGroup: Math.max(1, Math.min(16, Number(g.panesPerGroup) || 4)), transparency: Math.max(0, Math.min(95, Number(g.transparency) || 0)), blur: g.blur !== false, scheme: g.scheme ?? "", tint: g.tint === undefined ? 35 : Math.max(0, Math.min(100, Number(g.tint) || 0)), alternate: g.alternate !== false, scrollbackCapGB: Number(g.scrollbackCapGB) > 0 ? Number(g.scrollbackCapGB) : 20 });
     if (cfg.gui?.font || cfg.gui?.fontSize) this.send({ op: "font", ...(cfg.gui.font ? { family: cfg.gui.font } : {}), ...(cfg.gui.fontSize ? { size: cfg.gui.fontSize } : {}) });
@@ -1271,21 +1279,20 @@ class Driver {
     if (names.length) this.send({ op: "busy", text: "checking the machines…" });
     const checks = await Promise.all(names.map((n) => this.checkMachine(hosts[n]).catch(() => ({ ok: false, why: "check failed" }))));
     this.send({ op: "busy", text: "" });
-    const v = await this.ask({ title: "New project", ok: "Create", schema: { type: "object", required: ["name"], order: ["machine", "name", "repos", "goal", "ticket", "mode", "color"], properties: {
+    const v = await this.ask({ title: "New project", ok: "Create", schema: { type: "object", required: ["name"], order: ["machine", "name", "repos", "goal", "mode", "color"], properties: {
       ...(names.length ? { machine: { type: "string", title: "Machine", enum: ["", ...names],
         enumLabels: ["this machine", ...names.map((n, i) => `${n}   ${checks[i].ok ? "✓" : "✗"} ${checks[i].why}`)],
         description: "Where its Claude sessions run. A machine with ✗ cannot take projects until it is fixed (Connect › Manage machines…, or Deploy)." } } : {}),
       name: { type: "string", title: "Name" },
       repos: { type: "string", title: "Repos", placeholder: "~/src/api web acme/billing https://github.com/…/pull/12", description: "Paths, repo names, org/repo or URLs (a PR URL clones its branch), space separated. --branch B or --name N after one applies to it. A path is linked in, anything else is cloned fresh." },
       goal: { type: "string", title: "Goal", format: "multiline" },
-      ticket: { type: "string", title: "Ticket", placeholder: "ABC-123" },
       mode: { type: "string", title: "Containers", enum: ["per-repo", "shared"], enumLabels: ["one per repo", "one shared"], default: "per-repo" },
       color: { type: "string", title: "Color", enum: COLOR_CHOICES, default: COLOR_CHOICES[0] } } } });
     if (!v) return;
     const name = slug(String(v.name ?? ""));
     if (!name) throw new Error("that name has no usable characters (letters, digits, . _ -)");
     const machine = String(v.machine ?? "");
-    if (!machine) return this.createProject(name, { goal: String(v.goal ?? ""), shared: v.mode === "shared", color: v.color, ticket: String(v.ticket ?? "") }, String(v.repos ?? ""));
+    if (!machine) return this.createProject(name, { goal: String(v.goal ?? ""), shared: v.mode === "shared", color: v.color }, String(v.repos ?? ""));
     // on another machine: made and started there with its own my-claude, then shown here
     const i = names.indexOf(machine);
     if (i >= 0 && !checks[i].ok) throw new Error(`${machine}: ${checks[i].why}`);
@@ -1297,7 +1304,7 @@ class Driver {
         if (!r.ok && !(fine && fine.test(r.out))) throw new Error(`${machine}: ${r.out.split("\n").pop()}`);
       };
       try {
-        await step(["new", name, ...(v.goal ? ["--goal", String(v.goal)] : []), ...(v.color ? ["--color", String(v.color)] : []), ...(v.ticket ? ["--ticket", String(v.ticket)] : []), ...(v.mode === "shared" ? ["--shared"] : [])], /project '[^']*' exists/);
+        await step(["new", name, ...(v.goal ? ["--goal", String(v.goal)] : []), ...(v.color ? ["--color", String(v.color)] : []), ...(v.mode === "shared" ? ["--shared"] : [])], /project '[^']*' exists/);
         const specs = core.splitRepoSpecs(String(v.repos ?? "").trim());
         for (const spec of specs) await step(["add", name, ...spec.split(/\s+/), "--takeover"], /already in/);
         if (specs.length) await step(["up", name, "--no-attach", "--takeover"]);

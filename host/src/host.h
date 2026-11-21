@@ -292,6 +292,17 @@ private:
   void resume(const QString& id);
   void guardScrollback();
 
+  // --- where the user was (tab, pane, zoom, minimised, the consoles), kept across a restart
+  QJsonObject session_;     // as last saved
+  bool restoring_ = false;  // the panes it names are still opening
+  bool userActed_ = false;  // a key or a click since the start: the keyboard stays where the user put it
+  bool tabRestored_ = false;
+  QTimer* sessionTimer_ = nullptr;
+  QString sessionKey(const Term& t) const;
+  void restoreTerm(const QString& id);
+  void scheduleSave();
+  void saveSession();
+
   // --- consoles
   QHash<QString, ConsoleDock> docks_;
   static bool isConsoleTab(const QString& tab) { return tab.section('@', 0, 0) == "_consoles"; }
@@ -333,6 +344,10 @@ private:
   QString termOfNode(const QString& node) const;
   class QToolBar* toolbar_ = nullptr; // the operations over the list
   QIcon toolIcon(const QString& name) const;
+  // icons by name from the chosen set: the user's folder for it, the built-in set, then classic
+  QString iconSet_ = "v2", iconDir_;
+  QIcon setIcon(const QString& name) const;
+  QIcon kindIcon(const QString& kind) const;
   QHash<QString, QSet<QString>> nodeCan_; // per list entry: the toolbar buttons that apply
   QString contextNode();
   void updateToolbar();

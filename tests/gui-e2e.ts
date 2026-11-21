@@ -26,8 +26,8 @@ const fail = (m: string, extra?: unknown): never => {
 };
 setTimeout(() => fail("timeout"), 170_000);
 
-function startHost() {
-  host = Bun.spawn([bin, "--socket", sock, "--driver", driver], { stdout: "ignore", stderr: "inherit" });
+function startHost(env: Record<string, string | undefined> = process.env) {
+  host = Bun.spawn([bin, "--socket", sock, "--driver", driver], { stdout: "ignore", stderr: "inherit", env });
   Bun.write(join(tmp, `host.pid.${host.pid}`), String(host.pid));
   return host;
 }
@@ -309,7 +309,7 @@ await u.shows("demo back", (x) => titles(x) === "r1,r2 ★");
 
 // --- a new project from the dialog: created, repos added, started, shown
 u.act("app.new");
-await u.answer({ name: "Second One", repos: join(tmp, "r3"), goal: "g", ticket: "", mode: "per-repo", color: "green" });
+await u.answer({ name: "Second One", repos: join(tmp, "r3"), goal: "g", mode: "per-repo", color: "green" });
 l = await u.shows("second-one with r3", (x) => titles(x, "second-one") === "r3" && x.tabs.join() === "demo,second-one", 30000);
 const cur = l.current;
 u.send({ op: "focus", id: l.terminals.find((t: any) => t.tab === cur).id });
@@ -485,6 +485,9 @@ await u.shows("Settings open", (x) => x.asks.includes("settings"));
     if (i > 30) fail("Ctrl+Alt+K should show/hide the consoles now");
     await Bun.sleep(200);
   }
+  // (it opened one: gone again for what follows)
+  for (const t of (await u.list()).terminals.filter((t: any) => t.tab === "_consoles")) u.send({ op: "send", id: t.id, text: "exit\r" });
+  await u.shows("no consoles", (x) => !dock(x) || dock(x).count === 0);
 }
 
 // --- renaming in the list (what F2 sends): a display name; emptied, the default again
@@ -516,5 +519,31 @@ u = await client();
 await u.shows("demo again after a restart", (x) => titles(x) === "r1,r2 ★" && x.tabs.join() === "demo");
 u.send({ op: "quit" });
 await host!.exited;
+
+// --- a window that keeps its state (in this test's HOME) opens where the user left it: the
+// pane zoomed, the consoles' panel up, the keyboard in the console it was in
+{
+  const { MC_TERM_NO_STATE: _off, ...kept } = process.env;
+  startHost(kept);
+  u = await client();
+  l = await u.shows("demo, keeping state", (x) => titles(x) === "r1,r2 ★" && (!native || x.terminals.filter((t: any) => t.tab !== "_consoles").every((t: any) => t.live)));
+  const r2 = l.terminals.find((t: any) => t.title.startsWith("r2"));
+  u.send({ op: "focus", id: r2.id });
+  u.send({ op: "zoom", id: r2.id, on: true });
+  u.send({ op: "run", action: "host.consoles" });
+  l = await u.shows("r2 zoomed, a console up with the keyboard", (x) => term(x, r2.id)?.zoomed === true && dock(x)?.visible && x.terminals.some((t: any) => t.tab === "_consoles" && t.active));
+  const con = l.terminals.find((t: any) => t.tab === "_consoles");
+  await Bun.sleep(2000); // kept 1.5 s after the last change, and at the quit
+  u.send({ op: "quit" });
+  await host!.exited;
+  startHost(kept);
+  u = await client();
+  await u.shows("as it was: r2 zoomed, the consoles over demo, the keyboard in the console",
+    (x) => x.current === "demo" && term(x, r2.id)?.zoomed === true && dock(x)?.visible === true && term(x, con.id)?.active === true, 20000);
+  u.send({ op: "send", id: con.id, text: "exit\r" });
+  await u.shows("no consoles", (x) => !dock(x) || dock(x).count === 0);
+  u.send({ op: "quit" });
+  await host!.exited;
+}
 console.log("gui e2e OK");
 process.exit(0);

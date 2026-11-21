@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Console" shape-rendering="geometricPrecision">
+  <rect x="5" y="5" width="54" height="54" fill="#A6C2C4" stroke="#25313A" stroke-width="2"/>
+  <path d="M7 7 H57 V10 H7 Z" fill="#DDEFE9"/>
+  <path d="M7 10 H57 V19 H7 Z" fill="#1D4854"/>
+  <path d="M8 20 H56 V56 H8 Z" fill="#0C1A23"/>
+  <path d="M8 55 H56" stroke="#48616B" stroke-width="2"/>
+  <path d="M9 11 H34" stroke="#31FBE2" stroke-width="2" opacity="0.9"/>
+  <rect x="45" y="12" width="4" height="4" fill="#90BAB9"/>
+  <rect x="51" y="12" width="4" height="4" fill="#90BAB9"/>
+
+  <!-- prompt placed slightly left to keep badge corner clear -->
+  <path d="M16 31 L25 37 L16 43" fill="none" stroke="#31FBE2" stroke-width="4" stroke-linecap="square" stroke-linejoin="miter"/>
+  <path d="M30 46 H42" stroke="#31FBE2" stroke-width="4" stroke-linecap="square"/>
+
+  <!-- subtle code lines -->
+  <path d="M31 30 H48" stroke="#31FBE2" stroke-width="1.7" opacity="0.55"/>
+  <path d="M31 34 H45" stroke="#31FBE2" stroke-width="1.7" opacity="0.35"/>
+  <path d="M31 38 H41" stroke="#31FBE2" stroke-width="1.7" opacity="0.25"/>
+</svg>

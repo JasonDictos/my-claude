@@ -5,5 +5,11 @@
     <file>mc-term-16.png</file>
     <file>close.svg</file>
     <file>close-hover.svg</file>
-    <file>console.svg</file>
-    <file>console-docker.svg</file></qresource></RCC>
+    <file>sets/classic/console.svg</file>
+    <file>sets/classic/docker.svg</file>
+    <file>sets/classic/project.svg</file>
+    <file>sets/classic/tb-new-project.svg</file>
+    <file>sets/v2/console.svg</file>
+    <file>sets/v2/docker.svg</file>
+    <file>sets/v2/console-claude.svg</file>
+    <file>sets/v2/docker-claude.svg</file></qresource></RCC>

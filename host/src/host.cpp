@@ -115,11 +115,6 @@ QToolButton* glyphButton(QWidget* parent, Glyph which, const QString& tip) {
   return b;
 }
 
-QIcon kindIcon(const QString& kind) {
-  if (kind == "terminal") return QIcon(":/console.svg");
-  if (kind == "container") return QIcon(":/console-docker.svg");
-  return QIcon();
-}
 
 // The state mark in front of a sidebar entry: a filled dot, a half, a ring or a bang.
 QIcon dotIcon(const QString& shape, const QColor& color) {
@@ -384,7 +379,7 @@ Host::Host(const QString& socketPath, const QString& driverCmd, QWidget* parent)
   connect(qApp, &QApplication::focusChanged, this, [this] { updateToolbar(); noteSeen(); });
   connect(tabs_, &QTabWidget::currentChanged, this, [this](int i) {
     QTimer::singleShot(0, this, [this] { updateToolbar(); });
-    layoutDocks();
+    layoutDocks(); // (and the tab in front is kept)
     if (i < 0) { setWindowTitle(remote_.isEmpty() ? QString("my-claude") : "my-claude @ " + remote_); return; }
     const QString name = tabName(i);
     setWindowTitle(name + " — my-claude" + (remote_.isEmpty() ? QString() : " @ " + remote_));
@@ -508,6 +503,8 @@ Host::Host(const QString& socketPath, const QString& driverCmd, QWidget* parent)
     fontSize_ = st.value("fontSize", fontSize_).toInt();
     menuPersist_ = st.value("menuPersist", true).toBool();
     toolbar_->setVisible(st.value("toolbar", true).toBool());
+    session_ = QJsonDocument::fromJson(st.value("session").toByteArray()).object();
+    restoring_ = !session_.isEmpty();
     if (!menuPersist_) QTimer::singleShot(0, this, [this] { menuBar()->hide(); });
   }
   // Unlimited scrollback is file-backed, and the files go where TMPDIR says. /tmp is RAM
@@ -570,6 +567,12 @@ Host::Host(const QString& socketPath, const QString& driverCmd, QWidget* parent)
     if (st == Qt::ApplicationInactive && dropdown_ && isVisible() && !QApplication::activeModalWidget() && asks_.isEmpty()) hide();
     if (st == Qt::ApplicationActive) { reclaimSizes(); noteSeen(true); }
   });
+  sessionTimer_ = new QTimer(this);
+  sessionTimer_->setSingleShot(true);
+  sessionTimer_->setInterval(1500);
+  connect(sessionTimer_, &QTimer::timeout, this, &Host::saveSession);
+  // what has not come back by then (a project no longer running) is let go
+  if (restoring_) QTimer::singleShot(30000, this, [this] { restoring_ = false; scheduleSave(); });
   updateCenter();
   applyTransparency();
   // after main() has said whether this window is for another machine (setRemote)
@@ -588,6 +591,7 @@ Host::~Host() {
 }
 
 void Host::closeEvent(QCloseEvent* e) {
+  saveSession();
   quitting_ = true;
   if (statePersisted()) {
     QSettings st("my-claude", "mc-term");
@@ -827,6 +831,12 @@ void Host::handle(const QJsonObject& m, QLocalSocket* from) {
     if (m.contains("alternate")) alternate_ = m.value("alternate").toBool(true);
     if (m.contains("transparency")) transparency_ = qBound(0.0, m.value("transparency").toDouble(0) / 100.0, 0.95);
     if (m.contains("blur")) blur_ = m.value("blur").toBool(true);
+    if ((m.contains("iconSet") && m.value("iconSet").toString() != iconSet_) || (m.contains("iconDir") && m.value("iconDir").toString() != iconDir_)) {
+      iconSet_ = m.value("iconSet").toString(iconSet_);
+      iconDir_ = m.value("iconDir").toString(iconDir_);
+      rebuildTree();
+      for (QAction* a : toolbar_->actions()) if (a->property("icon").isValid()) a->setIcon(toolIcon(a->property("icon").toString()));
+    }
     if (m.contains("transparency") || m.contains("blur")) applyTransparency();
     if (m.contains("scheme") || m.contains("tint") || m.contains("alternate")) {
       for (Tab& t : tabsByName_) retile(t);
@@ -939,6 +949,7 @@ void Host::handle(const QJsonObject& m, QLocalSocket* from) {
       QAction* a = toolbar_->addAction(toolIcon(it.value("icon").toString()), it.value("label").toString());
       a->setToolTip(it.value("label").toString());
       a->setData(aid);
+      a->setProperty("icon", it.value("icon").toString());
       a->setProperty("scoped", it.value("scoped").toBool()); // greyed unless the highlighted entry allows it
       connect(a, &QAction::triggered, this, [this, aid] { runAction(aid); });
     }
@@ -1360,6 +1371,7 @@ void Host::open(const QJsonObject& m) {
   }
   if (native) startNative(id);
   else w->startShellProgram();
+  restoreTerm(id);
   emitEvent({{"ev", "opened"}, {"id", id}, {"tab", t.tab}});
   if (m.value("focus").toBool()) focusTerm(id);
 }
@@ -1945,6 +1957,7 @@ void Host::reveal(const QString& id) {
 // Rows of up to ceil(sqrt(n)) terminals, rebuilt on every change (splitter drags are lost:
 // the price of never a stale layout); hidden ones stay alive.
 void Host::retile(Tab& t) {
+  scheduleSave();
   if (!t.zoomed.isEmpty() && (!terms_.contains(t.zoomed) || terms_[t.zoomed].minimised)) t.zoomed.clear();
   const QList<QStringList> all = groups(t);
   t.group = qBound(0, t.group, qMax(0, int(all.size()) - 1));
@@ -2103,6 +2116,7 @@ void Host::paintTab(const Tab& t) {
 // (the sidebar, a dialog), like tmux's active pane.
 void Host::setActive(const QString& id) {
   if (!terms_.contains(id)) return;
+  scheduleSave();
   if (Tab* tab = tabOf(terms_[id].tab)) tab->lastFocus = id;
   if (activeId_ == id) return;
   const QString old = activeId_;
@@ -2169,8 +2183,12 @@ void Host::reclaimSizes() {
 }
 
 QString Host::currentTermId() {
-  // a console with the keyboard is the one acted on (its panel floats over the tab)
-  if (const QString f = termHolding(QApplication::focusWidget()); !f.isEmpty() && isConsoleTab(terms_.value(f).tab)) return f;
+  // a console with the keyboard is the one acted on (its panel floats over the tab); so is the
+  // one last used while its panel is up and nothing has the keyboard (the window not shown yet)
+  const QString f = termHolding(QApplication::focusWidget());
+  if (!f.isEmpty() && isConsoleTab(terms_.value(f).tab)) return f;
+  if (f.isEmpty() && terms_.contains(activeId_) && isConsoleTab(terms_[activeId_].tab))
+    if (auto d = docks_.constFind(terms_[activeId_].tab); d != docks_.constEnd() && !d->frame->isHidden() && !d->minimised) return activeId_;
   Tab* tab = currentTab();
   if (!tab) return QString();
   const QStringList vis = visible(*tab);
@@ -2265,6 +2283,73 @@ void Host::movePane(int dx, int dy) {
     col = qMin(col, qMin(perRow, n - row * perRow) - 1);
   }
   focusTerm(vis[row * perRow + col]);
+}
+
+// ---- where the user was, across a restart ---------------------------------------------
+
+// A pane by what it is: a peer's by its entry (its tmux pane changes when it is relaunched),
+// anything else by its id.
+QString Host::sessionKey(const Term& t) const { return t.node.startsWith("r:") ? t.node : t.id; }
+
+// A pane (re)opening while the last session is still being restored takes its place in it.
+void Host::restoreTerm(const QString& id) {
+  if (!restoring_ || !terms_.contains(id)) return;
+  const Term& t = terms_[id];
+  const QString key = sessionKey(t);
+  const bool keyboard = !userActed_ && key == session_.value("keys").toString();
+  if (isConsoleTab(t.tab)) {
+    auto d = docks_.find(t.tab);
+    if (d != docks_.end() && session_.value("consoles").toObject().value(t.tab).toObject().value("current").toString() == key) d->tabs->setCurrentWidget(t.box);
+    if (keyboard) focusTerm(id);
+    return;
+  }
+  Tab* tab = tabOf(t.tab);
+  if (!tab) return;
+  const QJsonObject was = session_.value("tabs").toObject().value(t.tab).toObject();
+  if (was.value("focus").toString() == key) tab->lastFocus = id;
+  bool again = false;
+  if (was.value("zoomed").toString() == key) { tab->zoomed = id; again = true; }
+  if (was.value("minimised").toArray().contains(key)) { terms_[id].minimised = true; again = true; }
+  if (again) retile(*tab);
+  if (!userActed_ && !tabRestored_ && t.tab == session_.value("tab").toString()) { tabRestored_ = true; tabs_->setCurrentWidget(tab->page); }
+  if (keyboard) { tabRestored_ = true; focusTerm(id); }
+}
+
+void Host::scheduleSave() {
+  if (sessionTimer_ && !quitting_ && statePersisted()) sessionTimer_->start();
+}
+
+// What is open now replaces what was saved of it; what is not open (yet) is kept, so a quit
+// before every project is back loses nothing.
+void Host::saveSession() {
+  if (!statePersisted() || quitting_) return;
+  QJsonObject out = session_;
+  if (!restoring_ || userActed_) {
+    out["tab"] = currentView();
+    const QString f = termHolding(QApplication::focusWidget());
+    const QString k = terms_.contains(f) ? f : activeId_;
+    out["keys"] = terms_.contains(k) ? sessionKey(terms_[k]) : QString();
+  }
+  QJsonObject tabs = out.value("tabs").toObject();
+  for (const Tab& t : tabsByName_) {
+    QJsonArray minimised;
+    for (const QString& id : t.order) if (terms_.contains(id) && terms_[id].minimised) minimised << sessionKey(terms_[id]);
+    tabs[t.name] = QJsonObject{{"focus", terms_.contains(t.lastFocus) ? sessionKey(terms_[t.lastFocus]) : QString()},
+                               {"zoomed", terms_.contains(t.zoomed) ? sessionKey(terms_[t.zoomed]) : QString()}, {"minimised", minimised}};
+  }
+  out["tabs"] = tabs;
+  QJsonObject cons = out.value("consoles").toObject();
+  for (const ConsoleDock& d : docks_) {
+    QStringList in(d.shownIn.begin(), d.shownIn.end());
+    QWidget* w = d.tabs->currentWidget();
+    const QString cur = termHolding(w ? w->findChild<QTermWidget*>() : nullptr);
+    cons[d.tab] = QJsonObject{{"shownIn", QJsonArray::fromStringList(in)}, {"minimised", d.minimised}, {"maximised", d.maximised},
+                              {"current", terms_.contains(cur) ? sessionKey(terms_[cur]) : QString()}};
+  }
+  out["consoles"] = cons;
+  session_ = out;
+  QSettings st("my-claude", "mc-term");
+  st.setValue("session", QJsonDocument(out).toJson(QJsonDocument::Compact));
 }
 
 // ---- consoles: a machine's shells, in a panel over the tabs ------------------------------
@@ -2370,6 +2455,10 @@ ConsoleDock& Host::dockFor(const QString& tab) {
     const int w = qMax(420, area.width() * 11 / 20), h = qMax(240, area.height() * 9 / 20), n = int(docks_.size());
     d.normal = QRect(qMax(0, area.width() - w - 16 - 28 * n), qMax(0, area.height() - h - 16 - 28 * n), w, h);
   }
+  const QJsonObject was = session_.value("consoles").toObject().value(tab).toObject();
+  for (const auto& v : was.value("shownIn").toArray()) d.shownIn.insert(v.toString());
+  d.minimised = was.value("minimised").toBool();
+  d.maximised = was.value("maximised").toBool();
   d.pin->setChecked(d.pinned);
   docks_.insert(tab, d);
   return docks_[tab];
@@ -2378,6 +2467,7 @@ ConsoleDock& Host::dockFor(const QString& tab) {
 // Each panel up (over the tabs it was opened on, or every one when pinned), minimised to its
 // title strip, maximised over the whole view, or not shown; never off the view.
 void Host::layoutDocks() {
+  scheduleSave();
   const QString view = currentView();
   const QRect area = center_->rect();
   QWidget* keys = QApplication::focusWidget();
@@ -2412,7 +2502,7 @@ void Host::showDock(const QString& tab, bool focus) {
   ConsoleDock& d = dockFor(tab);
   d.shownIn.insert(currentView());
   layoutDocks();
-  if (!d.frame->isVisible() || !focus || d.minimised) return;
+  if (d.frame->isHidden() || !focus || d.minimised) return; // (not isVisible: false until the window itself is shown)
   QWidget* w = d.tabs->currentWidget();
   const QString id = termHolding(w ? w->findChild<QTermWidget*>() : nullptr);
   if (terms_.contains(id)) { terms_[id].widget->setFocus(); setActive(id); }
@@ -2623,10 +2713,23 @@ void Host::pressKeys(const QJsonObject& m, QPointer<QLocalSocket> asker) {
 }
 
 // A toolbar icon: host/icons/tb-<name>.svg when there is one, else the desktop theme's, else Qt's.
+QIcon Host::setIcon(const QString& name) const {
+  for (const QString& f : {iconDir_.isEmpty() ? QString() : iconDir_ + "/" + name + ".svg", ":/sets/" + iconSet_ + "/" + name + ".svg", ":/sets/classic/" + name + ".svg"})
+    if (!f.isEmpty() && QFile::exists(f)) return QIcon(f);
+  // an agent's icon the set lacks: where it runs, without the badge
+  return name.endsWith("-claude") ? setIcon(name.chopped(7)) : QIcon();
+}
+
+// A list entry's icon by what it is: where a shell runs; an agent's carries its badge.
+QIcon Host::kindIcon(const QString& kind) const {
+  static const QHash<QString, QString> names{{"terminal", "console"}, {"container", "docker"}, {"terminal-claude", "console-claude"}, {"container-claude", "docker-claude"}, {"project", "project"}};
+  return names.contains(kind) ? setIcon(names.value(kind)) : QIcon();
+}
+
 QIcon Host::toolIcon(const QString& name) const {
-  if (QFile::exists(":/tb-" + name + ".svg")) return QIcon(":/tb-" + name + ".svg");
-  if (name == "shell") return QIcon(":/console-docker.svg");
-  if (name == "host-shell") return QIcon(":/console.svg");
+  if (QIcon own = setIcon("tb-" + name); !own.isNull()) return own;
+  if (name == "shell") return setIcon("docker");
+  if (name == "host-shell") return setIcon("console");
   static const QHash<QString, QPair<QString, QStyle::StandardPixmap>> theme{
     {"new-project", {"folder-new", QStyle::SP_FileDialogNewFolder}}, {"add-repos", {"list-add", QStyle::SP_DirOpenIcon}},
     {"chat", {"dialog-messages", QStyle::SP_MessageBoxInformation}}, {"connect", {"network-connect", QStyle::SP_DriveNetIcon}},
@@ -2853,6 +2956,7 @@ void Host::sidebarFocus() {
 // Keys in the sidebar: Esc goes back to the pane, Enter activates, and a single letter
 // runs the selected entry's action with that key (the old menu's a, x, u, d...).
 bool Host::eventFilter(QObject* o, QEvent* e) {
+  if (!userActed_ && (e->type() == QEvent::KeyPress || e->type() == QEvent::MouseButtonPress) && e->spontaneous()) userActed_ = true;
   if (dockEvent(o, e)) return true;
   // an entry with a live preview needs no tooltip as well: its details head the preview
   if (tree_ && o == tree_->viewport() && e->type() == QEvent::ToolTip)
