@@ -10,6 +10,10 @@
   that survives reboots, crashes and you walking away.
 </p>
 
+> [!WARNING]
+> **Written entirely with AI, with minimal code review.** It is very buggy and mostly
+> tailored to my own use cases. Use it at your own risk.
+
 <p align="center">
   <a href="#install">Install</a> ·
   <a href="#thirty-seconds">Thirty seconds</a> ·
