@@ -6,6 +6,7 @@
 # a transcript exists; down kills; up recreates; add while up -> 5th pane.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
+for t in tmux git jq; do command -v $t >/dev/null || { echo "tests/smoke.sh needs $t (sudo apt install $t, or dnf install $t)" >&2; exit 1; }; done
 tmp=$(mktemp -d); trap 'tmux kill-server 2>/dev/null || true; rm -rf "$tmp"' EXIT
 # Private tmux server: panes inherit the server's environment, so it must be ours.
 export TMUX_TMPDIR=$tmp; unset TMUX

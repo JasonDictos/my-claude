@@ -536,7 +536,8 @@ peer's brief; a profile's `brief()` can expand it into the ticket's text.
 ## Development
 
 TypeScript on bun, no build step. The menu is [Ink](https://github.com/vadimdemedes/ink),
-the same terminal UI library Claude Code renders with.
+the same terminal UI library Claude Code renders with. The tests need `tmux`, `git` and `jq`; the window's
+also need it built (`my-claude gui --build`: Qt 6 and qtermwidget headers), the daemon's an ssh client.
 
 ```bash
 bun run typecheck
