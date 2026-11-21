@@ -43,11 +43,17 @@ mc ls | grep -q '^smoke ' || fail "ls table"
 mc status smoke | grep -q '^r1 ' || fail "status table"
 
 # A big float in front (a shell) must not become the split target: the new peer stays docked.
-tmux new-pane -d -t mc-smoke -T shell:r1 -x 90% -y 90% sleep 300
-mc add smoke "$tmp/r5" --model opus-5.5 >/dev/null
-wait_log 5
-[ "$(tmux list-panes -s -t mc-smoke -F '#{pane_title} #{pane_floating_flag}' | grep '^r5 ')" = "r5 0" ] || fail "peer added over a float must be docked"
-tmux kill-pane -t "$(tmux list-panes -s -t mc-smoke -F '#{pane_id} #{pane_title}' | awk '$2=="shell:r1"{print $1}')"
+# (floating panes are tmux 3.8's; older ones just add the peer)
+if tmux -V | grep -qE 'tmux (next-)?(3\.([89]|[1-9][0-9])|[4-9])'; then
+  tmux new-pane -d -t mc-smoke -T shell:r1 -x 90% -y 90% sleep 300
+  mc add smoke "$tmp/r5" --model opus-5.5 >/dev/null
+  wait_log 5
+  [ "$(tmux list-panes -s -t mc-smoke -F '#{pane_title} #{?pane_floating_flag,1,0}' | grep '^r5 ')" = "r5 0" ] || fail "peer added over a float must be docked"
+  tmux kill-pane -t "$(tmux list-panes -s -t mc-smoke -F '#{pane_id} #{pane_title}' | awk '$2=="shell:r1"{print $1}')"
+else
+  mc add smoke "$tmp/r5" --model opus-5.5 >/dev/null
+  wait_log 5
+fi
 [ "$(panes)" = "r1 r2 r3 r4 r5 " ] || fail "5th pane: $(panes)"
 [ "$(wins)" = 1 ] || fail "5 peers should still be one window, got $(wins)"
 # Spill: the 7th peer opens a second window (tab) with its own panel; removing it closes the tab.
@@ -77,12 +83,14 @@ grep -q -- "$tmp/r1 --resume $sid" "$FAKE_CLAUDE_LOG" || fail "r1 should --resum
 grep -q -- "$tmp/r2 --session-id" "$FAKE_CLAUDE_LOG" || fail "r2 should still --session-id"
 
 # Symbol index: ctags over each peer at launch, into projects/<p>/.my-claude/<repo>/tags; rebuildable by hand.
-printf 'int smoke_fn(int a) { return a; }\n' > "$tmp/r1/smoke.c"
-mc index smoke r1 >/dev/null || fail "index"
-grep -q -P '^smoke_fn\t' "$MY_CLAUDE_ROOT/projects/smoke/.my-claude/r1/tags" || fail "index should hold smoke_fn"
-grep -q 'smoke_fn.*signature:(int a)' "$MY_CLAUDE_ROOT/projects/smoke/.my-claude/r1/tags" || fail "index should carry signatures"
-[ "$(mc index smoke | wc -l)" = 5 ] || fail "index with no repo indexes every peer"
-grep -q -- "Symbol index: $MY_CLAUDE_ROOT/projects/smoke/.my-claude/r1/tags" "$FAKE_CLAUDE_LOG" || fail "brief should name the index"
+if command -v ctags >/dev/null; then # without it there is simply no index
+  printf 'int smoke_fn(int a) { return a; }\n' > "$tmp/r1/smoke.c"
+  mc index smoke r1 >/dev/null || fail "index"
+  grep -q -P '^smoke_fn\t' "$MY_CLAUDE_ROOT/projects/smoke/.my-claude/r1/tags" || fail "index should hold smoke_fn"
+  grep -q 'smoke_fn.*signature:(int a)' "$MY_CLAUDE_ROOT/projects/smoke/.my-claude/r1/tags" || fail "index should carry signatures"
+  [ "$(mc index smoke | wc -l)" = 5 ] || fail "index with no repo indexes every peer"
+  grep -q -- "Symbol index: $MY_CLAUDE_ROOT/projects/smoke/.my-claude/r1/tags" "$FAKE_CLAUDE_LOG" || fail "brief should name the index"
+fi
 # Ticket: set, shown, briefed, cleared.
 mc ticket smoke abc-77 | grep -q 'ABC-77' || fail "ticket set"
 [ "$(mc ticket smoke)" = ABC-77 ] || fail "ticket get"
@@ -126,7 +134,7 @@ mc layout smoke solo >/dev/null
 [ "$(tmux list-windows -t mc-smoke -F '#{window_panes}' | sort -u)" = 1 ] || fail "solo: one pane per window"
 [ "$(panes)" = "r1 r2 r3 r4 r5 " ] || fail "solo lost a pane: $(panes)"
 sh1=$(bun -e 'const c = await import(process.argv[1]); console.log(await c.openShell("smoke", "r1"));' "$MY_CLAUDE_ROOT/src/core.ts")
-[ "$(tmux display-message -p -t "$sh1" '#{@mc_role} #{pane_floating_flag}')" = "shell:r1 0" ] || fail "solo shell should be a tagged window: $sh1"
+[ "$(tmux display-message -p -t "$sh1" '#{@mc_role} #{?pane_floating_flag,1,0}')" = "shell:r1 0" ] || fail "solo shell should be a tagged window: $sh1"
 [ "$(wins)" = 6 ] || fail "solo shell should be its own window, got $(wins)"
 # A shell whose program renames it after its repo is still a shell: closing it never costs the peer.
 tmux select-pane -t "$sh1" -T r1
@@ -140,13 +148,15 @@ mc add smoke "$tmp/r6" >/dev/null; wait_log 8
 p2=$(tmux list-panes -s -t '=mc-smoke' -F '#{pane_id} #{pane_title}' | awk '$2=="r2"{print $1}')
 v="mcv-smoke-${p2#%}"
 view() { script -qfc "bun $MY_CLAUDE_ROOT/src/cli.ts _view smoke $p2" /dev/null >/dev/null 2>&1 & for _ in $(seq 50); do tmux has-session -t "=$v" 2>/dev/null && return; sleep 0.1; done; fail "view session did not start"; }
-view
-got=$(tmux display-message -p -t "=$v:" '#{session_group} #{status} #{pane_id}')
-[ "$got" = "mc-smoke off $p2" ] || fail "view should show r2's window without a status bar: $got"
-[ "$(mc ls --json | jq -r '.[] | select(.name=="smoke") | .state')" != DOWN ] || fail "ls with a view attached"
-[ "$(mc status smoke --json | jq '.peers|length')" = 6 ] || fail "status with a view attached"
-tmux select-window -t "=$v:+1"; sleep 0.6
-tmux has-session -t "=$v" 2>/dev/null && fail "a view that changed window must end"
+if tmux -V | grep -qE 'tmux (next-)?(3\.([89]|[1-9][0-9])|[4-9])'; then # (the view fallback is not tested before tmux 3.8)
+  view
+  got=$(tmux display-message -p -t "=$v:" '#{session_group} #{status} #{pane_id}')
+  [ "$got" = "mc-smoke off $p2" ] || fail "view should show r2's window without a status bar: $got"
+  [ "$(mc ls --json | jq -r '.[] | select(.name=="smoke") | .state')" != DOWN ] || fail "ls with a view attached"
+  [ "$(mc status smoke --json | jq '.peers|length')" = 6 ] || fail "status with a view attached"
+  tmux select-window -t "=$v:+1"; sleep 0.6
+  tmux has-session -t "=$v" 2>/dev/null && fail "a view that changed window must end"
+fi
 
 mc layout smoke grid >/dev/null
 [ "$(mc layout smoke)" = grid ] || fail "grid not recorded"
@@ -170,7 +180,7 @@ mc rm smoke r5 >/dev/null
 cp "$MY_CLAUDE_ROOT/projects/smoke/project.json" "$tmp/smoke.json"
 # Bringing a project down takes its views with it: they share its windows and would keep the peers alive.
 p2=$(tmux list-panes -s -t '=mc-smoke' -F '#{pane_id} #{pane_title}' | awk '$2=="r2"{print $1}'); v="mcv-smoke-${p2#%}"
-view
+if tmux -V | grep -qE 'tmux (next-)?(3\.([89]|[1-9][0-9])|[4-9])'; then view; fi
 mc delete smoke >/dev/null
 tmux list-sessions -F '#S' 2>/dev/null | grep -q smoke && fail "sessions left after delete: $(tmux list-sessions -F '#S' | tr '\n' ' ')"
 [ "$(mc ls --json)" = "[]" ] || fail "delete"

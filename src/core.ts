@@ -900,9 +900,9 @@ export async function openShell(name: string, repo: string, where: "env" | "host
 // (untagged, docked, titled with a peer's repo) rather than a shell, the chat or a float.
 export interface PaneFacts { name: string | null; title: string; rawTitle: string; role: string; floating: boolean; peer: boolean }
 export async function paneFacts(id: string): Promise<PaneFacts> {
-  const s = await sh("tmux", ["display-message", "-p", ...(id ? ["-t", id] : []), `${tmux.PROJ}\t#{@mc_role}\t#{pane_floating_flag}\t#{pane_title}`], { ok: true });
-  const [sess = "", role = "", fl = "0", ...t] = s.split("\t");
-  const rawTitle = t.join("\t");
+  const s = await sh("tmux", ["display-message", "-p", ...(id ? ["-t", id] : []), [tmux.PROJ, "#{@mc_role}", "#{pane_floating_flag}", "#{pane_title}"].join(tmux.SEP)], { ok: true });
+  const [sess = "", role = "", fl = "0", ...t] = s.split(tmux.SEP);
+  const rawTitle = t.join(tmux.SEP);
   const name = sess.startsWith("mc-") && exists(sess.slice(3)) ? sess.slice(3) : null;
   const floating = fl === "1";
   const peer = !!name && !role && !floating && load(name).peers.some((x) => x.repo === rawTitle);

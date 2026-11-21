@@ -7,6 +7,9 @@ import { run, sh, shOk } from "./sh.ts";
 import { layout } from "./layout.ts";
 import { config, exists, load, type Layout } from "./store.ts";
 
+// Between fields of a tmux format: tmux 3.6 prints a tab (and, outside a UTF-8 locale, any
+// non-ASCII) as "_", so ASCII nobody types into a name.
+export const SEP = "<|>";
 export const sess = (name: string) => `mc-${name}`;
 
 // A view session shares its project's windows, so the project of a pane, client or hook
@@ -56,8 +59,8 @@ export const perWindow = (name?: string): number => (name && layoutOf(name) === 
 
 export interface Win { id: string; index: number; active: boolean; width: number; height: number }
 export async function windows(name: string): Promise<Win[]> {
-  return (await sh("tmux", ["list-windows", "-t", `=${sess(name)}`, "-F", "#{window_id}\t#{window_index}\t#{window_active}\t#{window_width}\t#{window_height}"], { ok: true }))
-    .split("\n").filter(Boolean).map((l) => { const [id, i, a, w, h] = l.split("\t"); return { id, index: Number(i), active: a === "1", width: Number(w), height: Number(h) }; })
+  return (await sh("tmux", ["list-windows", "-t", `=${sess(name)}`, "-F", ["#{window_id}", "#{window_index}", "#{window_active}", "#{window_width}", "#{window_height}"].join(SEP)], { ok: true }))
+    .split("\n").filter(Boolean).map((l) => { const [id, i, a, w, h] = l.split(SEP); return { id, index: Number(i), active: a === "1", width: Number(w), height: Number(h) }; })
     .sort((a, b) => a.index - b.index);
 }
 
@@ -89,7 +92,7 @@ export async function spawnPane(name: string, repo: string, cwd: string, env: Re
     } else {
       // Split the roomiest docked pane of that window; a small active pane gives "no space for
       // a new pane", and splitting a float would make the peer a float too.
-      const biggest = (await sh("tmux", ["list-panes", "-t", target.id, "-F", "#{pane_floating_flag} #{pane_id} #{pane_width} #{pane_height}"], { ok: true }))
+      const biggest = (await sh("tmux", ["list-panes", "-t", target.id, "-F", "#{?pane_floating_flag,1,0} #{pane_id} #{pane_width} #{pane_height}"], { ok: true }))
         .split("\n").map((l) => l.split(" ")).filter((f) => f[0] === "0").sort((a, b) => Number(b[2]) * Number(b[3]) - Number(a[2]) * Number(a[3]))[0]?.[1] ?? target.id;
       const split = () => sh("tmux", ["split-window", "-d", "-P", "-F", "#{pane_id}", "-t", biggest, "-c", cwd, ...envArgs, cmd]);
       try {
@@ -397,15 +400,15 @@ export async function currentSession(): Promise<string | null> {
 
 // When the calling client is one of the native app's views: its session and the app's socket.
 export async function clientView(client = ""): Promise<{ session: string; sock: string } | null> {
-  const [s, sock] = (await sh("tmux", ["display-message", "-p", ...(client ? ["-c", client] : []), "#{session_name}\t#{@mc_host_sock}"], { ok: true })).split("\t");
+  const [s, sock] = (await sh("tmux", ["display-message", "-p", ...(client ? ["-c", client] : []), `#{session_name}${SEP}#{@mc_host_sock}`], { ok: true })).split(SEP);
   return s?.startsWith(VIEW_PREFIX) ? { session: s, sock: sock ?? "" } : null;
 }
 
 // Project and peer of the client's active pane, or null outside a project. `repo` is the
 // pane's tag when it has one ("shell:<repo>"), else its title (a peer's repo).
 export async function activePeer(): Promise<{ name: string; repo: string; pane: string } | null> {
-  const line = await sh("tmux", ["display-message", "-p", `${PROJ}\t#{pane_id}\t#{@mc_role}\t#{pane_title}`], { ok: true });
-  const [s, pane, role, title] = line.split("\t");
+  const line = await sh("tmux", ["display-message", "-p", [PROJ, "#{pane_id}", "#{@mc_role}", "#{pane_title}"].join(SEP)], { ok: true });
+  const [s, pane, role, ...rest] = line.split(SEP), title = rest.join(SEP);
   const repo = role || title;
   if (!s?.startsWith("mc-") || !repo) return null;
   return { name: s.slice(3), repo, pane };
@@ -464,15 +467,16 @@ async function floatingPanes(): Promise<boolean> {
 // their `role` tag.
 export interface PaneRow { id: string; title: string; role: string; name: string; window: string; windowIndex: number; winActive: boolean; active: boolean; last: boolean; start: number; floating: boolean; width: number; height: number }
 export async function panes(name: string): Promise<PaneRow[]> {
-  const lines = await sh("tmux", ["list-panes", "-s", "-t", `=${sess(name)}`, "-F", "#{pane_floating_flag}\t#{pane_id}\t#{window_id}\t#{window_index}\t#{window_active}\t#{pane_active}\t#{pane_last}\t#{pane_start_time}\t#{pane_width}\t#{pane_height}\t#{@mc_name}\t#{@mc_role}\t#{pane_title}"], { ok: true });
+  const lines = await sh("tmux", ["list-panes", "-s", "-t", `=${sess(name)}`, "-F", ["#{pane_floating_flag}", "#{pane_id}", "#{window_id}", "#{window_index}", "#{window_active}", "#{pane_active}", "#{pane_last}", "#{pane_start_time}", "#{pane_width}", "#{pane_height}", "#{@mc_name}", "#{@mc_role}", "#{pane_title}"].join(SEP)], { ok: true });
   return lines.split("\n").filter(Boolean).map((l) => {
-    const [fl, id, win, wi, wa, pa, pl, st, w, h, nm, role, ...t] = l.split("\t");
-    return { id, title: t.join("\t"), role: role ?? "", name: nm ?? "", window: win, windowIndex: Number(wi), winActive: wa === "1", active: pa === "1", last: pl === "1", start: Number(st || 0), floating: fl === "1", width: Number(w), height: Number(h) };
+    const [fl, id, win, wi, wa, pa, pl, st, w, h, nm, role, ...t] = l.split(SEP);
+    return { id, title: t.join(SEP), role: role ?? "", name: nm ?? "", window: win, windowIndex: Number(wi), winActive: wa === "1", active: pa === "1", last: pl === "1", start: Number(st || 0), floating: fl === "1", width: Number(w), height: Number(h) };
   });
 }
 
 // A pane's name in the window, given by the user (empty: back to the default).
 export async function renamePane(pane: string, label: string): Promise<void> {
+  label = label.split(SEP).join("");
   await sh("tmux", ["set-option", "-p", ...(label ? [] : ["-u"]), "-t", pane, "@mc_name", ...(label ? [label] : [])], { ok: true });
 }
 
@@ -521,8 +525,8 @@ export async function killPane(pane: string): Promise<void> {
 // leave the windows (and the peers in them) alive under the views.
 export async function killSession(name: string): Promise<void> {
   const s = sess(name);
-  for (const line of (await sh("tmux", ["list-sessions", "-F", "#{session_name}\t#{session_group}"], { ok: true })).split("\n")) {
-    const [n, g] = line.split("\t");
+  for (const line of (await sh("tmux", ["list-sessions", "-F", `#{session_name}${SEP}#{session_group}`], { ok: true })).split("\n")) {
+    const [n, g] = line.split(SEP);
     if (g === s && n !== s) await sh("tmux", ["kill-session", "-t", `=${n}`], { ok: true });
   }
   await sh("tmux", ["kill-session", "-t", `=${s}`], { ok: true });

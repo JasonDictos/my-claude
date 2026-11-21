@@ -1314,9 +1314,10 @@ QString drawnText(const QByteArray& row) {
 }
 
 // What tmux tells about a pane, tab separated; F names the fields.
-const char kFacts[] = "#{pane_width}\t#{pane_height}\t#{alternate_on}\t#{cursor_x}\t#{cursor_y}\t#{cursor_flag}\t#{keypad_cursor_flag}\t#{keypad_flag}\t#{bracket_paste_flag}"
-                      "\t#{mouse_standard_flag}\t#{mouse_button_flag}\t#{mouse_all_flag}\t#{mouse_sgr_flag}\t#{mouse_utf8_flag}\t#{wrap_flag}\t#{insert_flag}\t#{origin_flag}"
-                      "\t#{scroll_region_upper}\t#{scroll_region_lower}\t#{history_size}\t#{history_limit}\t#{@mc_focus}\t#{cursor_shape}\t#{cursor_blinking}\t#{alternate_saved_x}\t#{alternate_saved_y}";
+// commas, not tabs: tmux 3.6 prints a tab in a format as "_"
+const char kFacts[] = "#{pane_width},#{pane_height},#{alternate_on},#{cursor_x},#{cursor_y},#{cursor_flag},#{keypad_cursor_flag},#{keypad_flag},#{bracket_paste_flag}"
+                      ",#{mouse_standard_flag},#{mouse_button_flag},#{mouse_all_flag},#{mouse_sgr_flag},#{mouse_utf8_flag},#{wrap_flag},#{insert_flag},#{origin_flag}"
+                      ",#{scroll_region_upper},#{scroll_region_lower},#{history_size},#{history_limit},#{@mc_focus},#{cursor_shape},#{cursor_blinking},#{alternate_saved_x},#{alternate_saved_y}";
 enum F { FWidth, FHeight, FAlt, FCx, FCy, FCursor, FAppCursor, FKeypad, FPaste, FMouseStd, FMouseBtn, FMouseAll, FMouseSgr, FMouseUtf8, FWrap, FInsert, FOrigin,
          FTop, FBottom, FHistory, FLimit, FFocus, FShape, FBlink, FSavedX, FSavedY };
 }
@@ -1482,7 +1483,7 @@ void Host::seed(const QString& id, bool keep) {
 
 void Host::applySeed(const QString& id, const QByteArray& factsLine, const QList<QByteArray>& history, const QList<QByteArray>& screen, const QList<QByteArray>& saved, bool keep) {
   Term& t = terms_[id];
-  const QList<QByteArray> f = factsLine.split('\t');
+  const QList<QByteArray> f = factsLine.split(',');
   const auto num = [&](int i) { return f.value(i).toInt(); };
   const int paneRows = qMax(1, num(FHeight));
   const bool alt = num(FAlt) == 1;
@@ -1665,7 +1666,7 @@ void Host::reflowCheck(const QString& id) {
 void Host::judgeReflow(const QString& id, const QByteArray& factsLine, const QList<QByteArray>& theirs, bool quiet) {
   auto it = terms_.find(id);
   if (it == terms_.end() || !it->live) return;
-  const QList<QByteArray> f = factsLine.split('\t');
+  const QList<QByteArray> f = factsLine.split(',');
   const int cols = it->widget->screenColumnsCount(), rows = it->widget->screenLinesCount();
   if (qEnvironmentVariableIsSet("MC_TERM_DEBUG")) fprintf(stderr, "reflow %s: tmux %dx%d, widget %dx%d, selected %d\n", qPrintable(id), f.value(FWidth).toInt(), f.value(FHeight).toInt(), cols, rows, int(it->widget->selectedText(true).size()));
   // tmux did not take our size (another client holds the window), or it moved on: nothing to compare.
