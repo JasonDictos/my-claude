@@ -309,7 +309,7 @@ export async function parseRepoSpec(line: string): Promise<RepoSpec & { name?: s
   }
   if (/^[\w.-]+\/[\w.-]+$/.test(t)) return { kind: "clone", repo: t, branch, display: t + (branch ? `#${branch}` : ""), name };
   if (/^[\w.-]+$/.test(t)) {
-    const org = config().clone?.defaultOrg ?? die(`'${t}' is not a path; set clone.defaultOrg in settings.json to clone <org>/${t}`);
+    const org = config().clone?.defaultOrg || die(`'${t}' is not a path; set clone.defaultOrg in settings.json to clone <org>/${t}`);
     return { kind: "clone", repo: `${org}/${t}`, branch, display: `${org}/${t}` + (branch ? `#${branch}` : ""), name };
   }
   die(`don't know what to do with '${t}'`);
@@ -655,7 +655,9 @@ export interface UpReport {
 
 // Idempotent: launches only what is missing, never touches a live or stranger-held repo.
 export async function up(name: string, o: { takeover?: boolean } = {}): Promise<UpReport[]> {
-  if (existsSync("/.dockerenv")) die("up runs on the host, not in a container");
+  // inside a peer's own dev container the tmux there is not the projects' (a machine that is
+  // itself a container, a devcontainer or a cloud box, is fine)
+  if (existsSync("/.dockerenv") && process.env.MY_CLAUDE_PROJECT) die("up runs on the host, not in a peer's container");
   const p = load(name);
   if (p.peers.length === 0) die(`${name} has no peers (my-claude add)`);
   profile(p.profile);

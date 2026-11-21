@@ -1,5 +1,4 @@
 {
   "profile": "host",
-  "clone": { "defaultOrg": "your-github-org" },
-  "peers": { "cli": "~/claude-peers-mcp/cli.ts" }
+  "clone": { "defaultOrg": "" }
 }
