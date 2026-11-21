@@ -3,7 +3,8 @@
 # Copyright (c) 2026 Jason Dictos - my-claude, https://github.com/JasonDictos/my-claude
 # my-claude entry point usable everywhere: bun on the source when bun is around (the
 # host), else the compiled binary (dev containers, where only the home dir is shared).
-root=$(cd "$(dirname "$0")/.." && pwd)
+self=$(readlink -f "$0" 2>/dev/null || echo "$0") # through a symlink (install.sh links ~/.local/bin to it)
+root=$(cd "$(dirname "$self")/.." && pwd)
 export MY_CLAUDE_ROOT="${MY_CLAUDE_ROOT:-$root}"
 # tmux run-shell (status-bar clicks) has a bare PATH, so look in bun's install dir too.
 for b in bun "$HOME/.bun/bin/bun"; do

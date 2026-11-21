@@ -81,9 +81,9 @@ curl -fsSL https://raw.githubusercontent.com/JasonDictos/my-claude/main/install.
 
 That clones to `~/my-claude`, installs [bun](https://bun.sh) if you don't have
 it, links `~/.local/bin/my-claude`, and seeds `~/.config/my-claude/settings.json`.
-Re-running updates. Needs `git`, `tmux` (3.2+), and `claude` (Claude Code) on PATH.
+Re-running updates. Needs `git`, `tmux` (3.2+), `curl`, `unzip` (bun's installer uses it) and `claude` (Claude Code); the script says what is missing and how to get it.
 
-Manual: `git clone … ~/my-claude && cd ~/my-claude && bun install && ln -s $PWD/src/cli.ts ~/.local/bin/my-claude`.
+Manual: `git clone … ~/my-claude && cd ~/my-claude && bun install && ln -s $PWD/bin/my-claude ~/.local/bin/my-claude`.
 
 ## Thirty seconds
 
