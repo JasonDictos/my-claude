@@ -6,7 +6,7 @@
 # build the window in a clean tree, lay out the package, dpkg-deb.
 #   packaging/build-deb.sh            -> dist/deb/my-claude_<version>_amd64.deb
 # Needs: bun, cmake, ninja-build, g++, qt6-base-dev, libqt6svg6-dev, libqtermwidget6-2-dev,
-# libxcb1-dev, dpkg-dev.
+# libxcb1-dev, libutf8proc-dev (qtermwidget links it without depending on it), dpkg-dev.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd); repo=$(cd "$here/.." && pwd)
 version=$(sed -n 's/^ *"version": *"\([^"]*\)".*/\1/p' "$repo/package.json" | head -1)

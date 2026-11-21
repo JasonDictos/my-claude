@@ -1,6 +1,6 @@
 {
   "name": "my-claude",
-  "version": "0.0.2-alpha",
+  "version": "0.0.3-alpha",
   "private": true,
   "type": "module",
   "description": "One long-lived Claude Code session per repo, grouped into projects: a native window (or tmux), a daemon that keeps them up, and every machine you can ssh to in one window.",
