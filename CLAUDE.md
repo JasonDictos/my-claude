@@ -11,5 +11,9 @@
   form's `table` and `picker` formats: `columns`, `enumRows`, `sort`). Dates as
   `YYYY-MM-DD HH:MM`, so they sort as text.
 - Comments: one or two lines, why not what; history goes in the commit message.
+- **The README's pictures come from the sandbox the UI tests use**, never from a real
+  machine. A change to what the window shows refreshes them in the same commit:
+  `tests/gui-demo.sh docs` (docs/gui.png, docs/overview.png); a change to the terminal UI:
+  `tests/demo.sh` (docs/demo/*.gif, docs/screenshot.png).
 - Nothing specific to one employer or person in this public repo: their profiles live in
   ~/.config/my-claude/profiles/.

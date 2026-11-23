@@ -48,7 +48,7 @@ back on the same conversations after the containers, tmux or the machine itself 
 
 <p align="center">
   <img src="docs/gui.png" alt="the native window: a project as a tab, four peers and a shell as panes, the project tree on the left">
-  <br><sub>The native window: <code>api-overhaul</code> is a tab, each repo's Claude a pane, a host shell on <code>web</code> beside them. The list groups the projects by machine, with the operations over it; ! asks for you, ✉ has finished its turn.</sub>
+  <br><sub>The native window: <code>api-overhaul</code> is a tab, each repo's Claude a pane, a host shell on <code>web</code> beside them. The list groups the projects by machine, with the operations over it. Each agent's icon says where it runs (the whale: in a container; the terminal: on the host) and what it is doing: <code>api</code>'s animates while it works, <code>web</code>'s asks for you (bold), <code>worker</code>'s has finished its turn.</sub>
 </p>
 
 And the same projects in tmux, for when a terminal is all there is:

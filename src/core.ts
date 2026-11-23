@@ -865,6 +865,9 @@ export async function ls(): Promise<ProjectRow[]> {
 // scan of /proc for all of them (status() per project would scan it once per peer).
 export interface PeerSnap extends Peer { state: PeerState; pane: string | null; attn: Attention; boxed: boolean | null } // boxed: its claude runs in a container (null: not running)
 export interface ProjectSnap { project: Project; up: boolean; state: ProjectState; color: string; attn: Attention; peers: PeerSnap[]; panes: tmux.PaneRow[] }
+// Demos and tests have no docker: MY_CLAUDE_TEST_BOXED lists checkouts (":"-separated) to show as in one.
+const demoBoxed = (path: string) => (process.env.MY_CLAUDE_TEST_BOXED ?? "").split(":").includes(path);
+
 export async function snapshot(): Promise<ProjectSnap[]> {
   const pidOf = occupantsIndex();
   const now = Math.floor(Date.now() / 1000);
@@ -875,7 +878,7 @@ export async function snapshot(): Promise<ProjectSnap[]> {
     const peers: PeerSnap[] = p.peers.map((peer) => {
       const pane = tmux.peerPane(rows, peer.repo);
       const pid = pidOf(peer.path, whoOf(p, peer));
-      return { ...peer, state: peerStateOf(pane ? Math.max(0, now - pane.start) : null, pid), pane: pane?.id ?? null, attn: attention(p.name, peer.repo), boxed: pid ? !!containerOf(pid) : null };
+      return { ...peer, state: peerStateOf(pane ? Math.max(0, now - pane.start) : null, pid), pane: pane?.id ?? null, attn: attention(p.name, peer.repo), boxed: pid ? !!containerOf(pid) || demoBoxed(peer.path) : null };
     });
     // a busy screen says "work" too: Claudes launched before the hooks wrote it never will
     const busy = await tmux.busy(peers.filter((x) => x.pane && x.state === "live").map((x) => x.pane as string));
