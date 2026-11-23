@@ -466,6 +466,23 @@ async function floatingPanes(): Promise<boolean> {
 // Every pane of the project, floats included: peers titled by repo, shells and the chat by
 // their `role` tag.
 export interface PaneRow { id: string; title: string; role: string; name: string; window: string; windowIndex: number; winActive: boolean; active: boolean; last: boolean; start: number; floating: boolean; width: number; height: number }
+// The panes whose Claude is busy now: Claude Code ends its screen with "… esc to interrupt"
+// while it works. Only the last lines count; the words may sit anywhere in what it wrote.
+export async function busy(ids: string[]): Promise<Set<string>> {
+  if (!ids.length) return new Set();
+  const END = "\u001fmc-end ";
+  const out = await sh("tmux", ids.flatMap((id, i) => [...(i ? [";"] : []), "capture-pane", "-p", "-t", id, ";", "display-message", "-p", "-t", id, `${END}#{pane_id}`]), { ok: true });
+  const found = new Set<string>();
+  let lines: string[] = [];
+  for (const line of out.split("\n")) {
+    if (line.startsWith(END)) {
+      if (lines.filter((l) => l.trim()).slice(-3).some((l) => /esc to interrupt/i.test(l))) found.add(line.slice(END.length));
+      lines = [];
+    } else lines.push(line);
+  }
+  return found;
+}
+
 export async function panes(name: string): Promise<PaneRow[]> {
   const lines = await sh("tmux", ["list-panes", "-s", "-t", `=${sess(name)}`, "-F", ["#{pane_floating_flag}", "#{pane_id}", "#{window_id}", "#{window_index}", "#{window_active}", "#{pane_active}", "#{pane_last}", "#{pane_start_time}", "#{pane_width}", "#{pane_height}", "#{@mc_name}", "#{@mc_role}", "#{pane_title}"].join(SEP)], { ok: true });
   return lines.split("\n").filter(Boolean).map((l) => {

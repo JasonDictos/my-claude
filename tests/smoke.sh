@@ -17,6 +17,30 @@ echo '{"profile":"host","peers":{"cli":"/nonexistent/claude-peers-cli"}}' > "$MY
 mc() { bun "$MY_CLAUDE_ROOT/src/cli.ts" "$@"; }
 fail() { echo "FAIL: $*" >&2; exit 1; }
 bun "$here/gate.ts" >/dev/null || fail "the ssh gate (tests/gate.ts)"
+# An agent's state from its hooks: working, asking, done; an interrupted or dead turn goes idle.
+hooks=$(bun -e 'const a = await import(process.argv[1]); console.log(a.attentionSettings("hk", "r"));' "$MY_CLAUDE_ROOT/src/attention.ts")
+hook() { jq -r --arg e "$1" --arg m "${2:-}" '.hooks[$e][]? | select($m == "" or ((.matcher // "") | test($m))) | .hooks[].command' <<<"$hooks"; }
+run_hook() { local c; c=$(hook "$@"); [ -n "$c" ] || fail "no $1 ${2:-}hook"; sh -c "$c"; }
+state() { cat "$MY_CLAUDE_ROOT/projects/hk/.attn/r" 2>/dev/null || echo none; }
+check() { [ "$(state)" = "$1" ] || fail "after $2 the state is $(state), not $1"; }
+run_hook UserPromptSubmit; check work "a prompt"
+run_hook Notification permission_prompt; check ask "a permission prompt"
+run_hook PostToolUse; check work "the tool ran"
+run_hook Stop; check wait "the turn ended"
+run_hook Notification idle_prompt; check wait "idling after a finished turn"
+run_hook UserPromptSubmit; run_hook Notification idle_prompt; check none "idling after an interrupted turn"
+run_hook UserPromptSubmit; run_hook SessionStart resume; check none "a new session after a dead one"
+run_hook UserPromptSubmit; [ -z "$(hook SessionStart compact)" ] || fail "a compaction mid-turn must not end the work"
+rm -rf "$MY_CLAUDE_ROOT/projects/hk"
+# A Claude busy right now says so on its last line ("esc to interrupt"), hooks or not; the same
+# words higher up, in what it wrote, are not its footer.
+tmux new-session -d -s busytest -x 120 -y 20 "printf 'said esc to interrupt before\n\n> \n  bypass permissions on · esc to interrupt\n'; sleep 600"
+tmux new-window -d -t busytest "printf 'I mention esc to interrupt here\nmore\nlines\n\n> \n  bypass permissions on (shift+tab to cycle)\n'; sleep 600"
+sleep 0.5
+mapfile -t bp < <(tmux list-panes -s -t =busytest -F '#{pane_id}')
+busy=$(bun -e 'const t = await import(process.argv[1]); console.log([...await t.busy(process.argv.slice(2))].join(","));' "$MY_CLAUDE_ROOT/src/tmux.ts" "${bp[@]}")
+[ "$busy" = "${bp[0]}" ] || fail "busy panes: '$busy', want only ${bp[0]} (of ${bp[*]})"
+tmux kill-session -t =busytest
 panes() { tmux list-panes -s -t mc-smoke -F '#{pane_title}' | grep -v '^my-claude-panel$' | sort | tr '\n' ' '; }
 panel() { tmux list-panes -t mc-smoke:1 -F '#{pane_title} #{pane_left} #{pane_width}' | grep '^my-claude-panel '; }
 wins() { tmux list-windows -t mc-smoke -F '#{window_index}' | wc -l; }
@@ -201,4 +225,46 @@ mc undelete | grep -q '^smoke ' || fail "undelete should list the trashed projec
 mc undelete smoke >/dev/null || fail "undelete"
 cmp -s "$tmp/smoke.json" "$MY_CLAUDE_ROOT/projects/smoke/project.json" || fail "undelete must restore the record (paths, session ids) unchanged"
 mc delete smoke >/dev/null
+# A project started with a work order (the MCP tool): the lead takes it as its first prompt.
+mkdir -p "$tmp/r8"; n=$(lines)
+bun -e 'const c = await import(process.argv[1]); await c.startProject({ name: "kick", repos: [process.argv[2]], workOrder: "do the kick work" });' "$MY_CLAUDE_ROOT/src/core.ts" "$tmp/r8" >/dev/null
+wait_log $((n + 1))
+tail -1 "$FAKE_CLAUDE_LOG" | grep -q ' do the kick work$' || fail "the lead's first prompt: $(tail -1 "$FAKE_CLAUDE_LOG")"
+mc delete kick >/dev/null
+# Removing means deleting: a clone goes from disk, a repo linked from elsewhere is only unlinked.
+# Nothing goes without --force while it would lose something: changes, commits, stashes, a non-repo.
+git init -q -b main "$tmp/upstream" && git -C "$tmp/upstream" -c user.name=t -c user.email=t@t commit -q --allow-empty -m one
+git clone -q --bare "$tmp/upstream" "$tmp/origin.git"
+mkdir -p "$tmp/linked"; mc new del >/dev/null
+mc add del "file://$tmp/origin.git" >/dev/null; mc add del "$tmp/linked" >/dev/null
+clone=$MY_CLAUDE_ROOT/projects/del/origin
+[ -d "$clone/.git" ] || fail "no clone at $clone"
+touch "$clone/new-file"
+out=$(mc rm del origin 2>&1) && fail "removed a clone with an uncommitted file: $out"
+echo "$out" | grep -q "1 uncommitted file" || fail "should say what would be lost: $out"
+rm "$clone/new-file"; git -C "$clone" -c user.name=t -c user.email=t@t commit -q --allow-empty -m mine
+out=$(mc rm del origin 2>&1) && fail "removed a clone with an unpushed commit: $out"
+echo "$out" | grep -q "1 unpushed commit" || fail "should say what would be lost: $out"
+git -C "$clone" push -q origin HEAD
+# a rebased (here: amended) copy of pushed work is no loss; a branch never pushed is, by name
+g() { git -C "$clone" -c user.name=t -c user.email=t@t "$@"; }
+g checkout -q -b topic; echo t > "$clone/t"; g add t; g commit -q -m t1; g push -q -u origin topic; g commit -q --amend -m "t1 reworded"
+g checkout -q main; g checkout -q -b scratch; echo w > "$clone/w"; g add w; g commit -q -m wip; g checkout -q main
+out=$(mc rm del origin 2>&1) && fail "removed a clone with a branch never pushed: $out"
+echo "$out" | grep -q "1 unpushed commit on scratch" || fail "should name the branch: $out"
+echo "$out" | grep -q "topic" && fail "a rebased copy of pushed work is no loss: $out"
+g branch -q -D scratch
+mc rm del origin >/dev/null || fail "a clean, pushed clone should go without --force"
+[ -e "$clone" ] && fail "the removed clone is still on disk"
+mc rm del linked >/dev/null; [ -d "$tmp/linked" ] || fail "a linked repo must never be deleted"
+# the project: a stray folder in it is no repo, so it takes --force; the record stays for undelete
+mc add del "file://$tmp/origin.git" >/dev/null; mkdir -p "$MY_CLAUDE_ROOT/projects/del/notes"; echo x > "$MY_CLAUDE_ROOT/projects/del/notes/todo"
+mkdir -p "$MY_CLAUDE_ROOT/projects/del/.attn"
+out=$(mc delete del 2>&1) && fail "deleted a project holding a folder that is no repo: $out"
+echo "$out" | grep -q "notes: not a git repo" || fail "should name the folder: $out"
+echo "$out" | grep -q "\.attn" && fail "my-claude's own folders are no clones: $out"
+mc delete del --force >/dev/null || fail "delete --force"
+[ -e "$MY_CLAUDE_ROOT/projects/del" ] && fail "the project is still on disk"
+[ -n "$(find "$MY_CLAUDE_ROOT/.trash" -path '*-del/project.json' 2>/dev/null)" ] || fail "the project's record should stay for undelete"
+[ -n "$(find "$MY_CLAUDE_ROOT/.trash" -path '*-del/origin' 2>/dev/null)" ] && fail "a clone went to the trash instead of off the disk"
 echo "smoke OK"

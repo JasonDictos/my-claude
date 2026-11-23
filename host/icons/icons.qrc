@@ -12,4 +12,33 @@
     <file>sets/v2/console.svg</file>
     <file>sets/v2/docker.svg</file>
     <file>sets/v2/console-claude.svg</file>
-    <file>sets/v2/docker-claude.svg</file></qresource></RCC>
+    <file>sets/v2/docker-claude.svg</file>
+    <file>sets/v4/badge-claude.svg</file>
+    <file>sets/v4/console-asking.svg</file>
+    <file>sets/v4/console-done.svg</file>
+    <file>sets/v4/console-working-01.svg</file>
+    <file>sets/v4/console-working-02.svg</file>
+    <file>sets/v4/console-working-03.svg</file>
+    <file>sets/v4/console-working-04.svg</file>
+    <file>sets/v4/console-working-05.svg</file>
+    <file>sets/v4/console-working-06.svg</file>
+    <file>sets/v4/console-working-07.svg</file>
+    <file>sets/v4/console-working-08.svg</file>
+    <file>sets/v4/console-working-09.svg</file>
+    <file>sets/v4/console-working-10.svg</file>
+    <file>sets/v4/console.svg</file>
+    <file>sets/v4/docker-asking.svg</file>
+    <file>sets/v4/docker-done.svg</file>
+    <file>sets/v4/docker-working-01.svg</file>
+    <file>sets/v4/docker-working-02.svg</file>
+    <file>sets/v4/docker-working-03.svg</file>
+    <file>sets/v4/docker-working-04.svg</file>
+    <file>sets/v4/docker-working-05.svg</file>
+    <file>sets/v4/docker-working-06.svg</file>
+    <file>sets/v4/docker-working-07.svg</file>
+    <file>sets/v4/docker-working-08.svg</file>
+    <file>sets/v4/docker-working-09.svg</file>
+    <file>sets/v4/docker-working-10.svg</file>
+    <file>sets/v4/docker.svg</file>
+    <file>sets/v4/project.svg</file>
+    <file>sets/v4/tb-new-project.svg</file></qresource></RCC>

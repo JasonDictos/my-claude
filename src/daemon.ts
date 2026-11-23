@@ -47,6 +47,7 @@ class Daemon {
     mkdirSync(join(sock, ".."), { recursive: true });
     if (await daemonCall({ op: "ping" }, 1500)) { console.error("my-claude daemon: already running"); return 1; }
     rmSync(sock, { force: true });
+    void core.sweepDeleting();
     const srv = createServer((c) => this.client(c));
     await new Promise<void>((r) => srv.listen(sock, r));
     log(`daemon up (pid ${process.pid}) on ${sock}; auto-restart ${this.autoRestart() ? "on" : "off"}`);

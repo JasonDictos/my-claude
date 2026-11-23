@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" role="img" aria-label="Claude provider badge" shape-rendering="geometricPrecision">
+<circle cx="12" cy="12" r="11.1" fill="#F9F6F2" stroke="#25313A" stroke-width="1.55"/>
+<g stroke="#D97757" stroke-linecap="round" stroke-width="2.0">
+<path d="M12 4.0V9.1M12 14.9V20.0M4 12H9.1M14.9 12H20"/>
+<path d="M6.3 6.3L9.9 9.9M14.1 14.1L17.7 17.7M17.7 6.3L14.1 9.9M9.9 14.1L6.3 17.7"/>
+<path d="M8.9 4.7L10.8 9.4M13.2 14.6L15.1 19.3M4.7 8.9L9.4 10.8M14.6 13.2L19.3 15.1M15.1 4.7L13.2 9.4M10.8 14.6L8.9 19.3M19.3 8.9L14.6 10.8M9.4 13.2L4.7 15.1" stroke-width="1.45"/>
+</g>
+<circle cx="12" cy="12" r="2.0" fill="#D97757"/>
+</svg>

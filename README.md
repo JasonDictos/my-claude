@@ -36,7 +36,8 @@ back on the same conversations after the containers, tmux or the machine itself 
   group, so the API agent can tell the web agent the error shape changed. You can join
   the chat too.
 - **Nothing is lost.** Conversations are resumed by id; a crashed pane relaunches on the
-  same session; a deleted project goes to the trash, not away.
+  same session; a deleted project's record stays, so undelete brings back its paths and
+  conversations.
 - **Two faces.** A tmux layout with a side panel for the terminal, or a native desktop
   window with tabs, a project tree and real terminals: unlimited scrollback, your font,
   your clipboard.
@@ -153,7 +154,7 @@ typed (Up/Down) and predict as you type (Tab or → accepts; for repos the
 candidates are your history, git checkouts under `~`, and your org's repos).
 
 **Projects screen:** `Enter` open · `n` new (name → container mode → color) ·
-`u` up · `d` down · `x` delete (to `.trash/`, never `rm -rf`) · `U` undelete · plus any hotkeys
+`u` up · `d` down · `x` delete (its clones off the disk) · `U` undelete · plus any hotkeys
 your profile adds.
 
 **Project screen:** `Enter` join (tmux, that peer focused) · `a` add repos
@@ -231,7 +232,7 @@ tests/gui-demo.sh          # try it in a sandbox: temp HOME, fake claude, privat
   default name again). It marks
   the pane the keyboard is in; walking it (`` Ctrl+` ``, arrows) brings what it points at
   on screen, Enter or a click goes there, a double-click on a stopped project starts it.
-  Each entry's menu (right-click, or its letter) is what the old menu had.
+  Each entry's menu (right-click, or Ctrl+ its letter: Ctrl+F opens its folder in the file manager) is what the old menu had.
 - **The terminals are real ones.** The window is each tmux pane's terminal (through a
   tmux control client), so scrolling, selecting, searching (`Ctrl+Shift+F`) and copying
   are the window's own, `Ctrl-b` reaches the program, and nothing of tmux is drawn.
@@ -292,8 +293,8 @@ global shortcuts) is refused, since it would never reach the window. Stored as `
 | `Meta+Shift+W` | the overview: every terminal at once |
 | `Ctrl+Alt+T` (anywhere, after `--install`) | show the window in front, or hide it |
 
-Settings (my-claude → Settings…, or `gui` in `settings.json`): `iconSet` (`v2`, `classic`, or
-a folder of SVGs in `~/.config/my-claude/icons/<name>/`), `font`, `fontSize`,
+Settings (my-claude → Settings…, or `gui` in `settings.json`): `iconSet` (`v4`, the animated
+one; `v2`; `classic`; or a folder of SVGs in `~/.config/my-claude/icons/<name>/`), `font`, `fontSize`,
 `scheme` (a named qtermwidget scheme instead of the tinted one), `tint` (0-100),
 `alternate`, `transparency` (0-95, with `blur`), `panesPerGroup`, `scrollback` (0:
 unlimited), `seedLines` (how much of tmux's scrollback a pane starts with, 50000),
@@ -455,7 +456,7 @@ usage: my-claude [cui] [--remote user@host] <command> [args]   (no command: the 
   add    <project> <spec> [<spec>...] [--model M]
          spec: <path> | <repo> | <org>/<repo> | <git url> | <PR url>, each with optional --branch B --name N
          a path is symlinked into projects/<project>/; anything else is cloned there fresh
-  rm     <project> <repo>                remembered: readd puts it back with the same path and conversation
+  rm     <project> <repo> [--force]      its clone is deleted (a linked repo only unlinked); readd: same path and conversation
   readd  <project> [<repo>]              re-add a removed repo (no repo: list what was removed)
   up     <project> [--no-attach]
   attach <project> [<repo>]
@@ -470,7 +471,7 @@ usage: my-claude [cui] [--remote user@host] <command> [args]   (no command: the 
   index  <project> [<repo>]              rebuild the ctags symbol index (automatic at launch)
   restart  <project> <repo>              stop the peer's claude and start it again in the same pane, same conversation
   takeover <project> <repo>              kill the stranger occupying the repo, launch the peer
-  delete <project> [--force]             down + move the project dir to .trash/ (conversations kept)
+  delete <project> [--force]             down + its clones deleted, the record to .trash/ for undelete (conversations kept)
   undelete [<project>]                   bring a deleted project back; no project: list .trash/
   layout <project> [grid|solo]           grid: tiled tmux windows and the side panel (the terminal UI);
                                          solo: one pane per window, as the window shows it
@@ -529,10 +530,10 @@ guessing. The index sits in the project directory, so a container that sees
 the project sees every peer's index. `my-claude index <project> [repo]`
 rebuilds by hand. No ctags on the host: no index, nothing else changes.
 
-Removing a repo (`x`, `my-claude rm`, prefix+x on its pane) is remembered:
+Removing a repo (`x`, `my-claude rm`, prefix+x on its pane) deletes its clone
+from disk (a repo linked from elsewhere only loses its link) and is remembered:
 `U` inside the project, or `my-claude readd <project> <repo>`, puts it back
-with the same path and the same conversation; a clone that went with it is
-cloned again from its origin.
+with the same path and the same conversation, cloned again from its origin.
 
 A project can be *for* a ticket: `my-claude new … --ticket ABC-123`,
 `my-claude ticket <project> ABC-123` (`-` clears), the `t` key in the menu,
@@ -541,11 +542,16 @@ peer's brief; a profile's `brief()` can expand it into the ticket's text.
 
 ## Safety notes
 
-- Deleting goes to `.trash/<timestamp>-<name>/` in the data root. A fresh clone can
-  hold work nothing else has. `undelete` moves it back under the same name and
-  paths, so every peer picks up its old conversation (Claude keys them by
-  directory); a clone whose directory is gone is cloned again from the origin
-  recorded when it was added.
+- Deleting a project or removing a repo deletes the clones my-claude made (under
+  `projects/<name>/`) from disk: moved aside at once, then `rm -rf` behind that,
+  with `sudo -n` for root's files that container builds leave. Repos linked from
+  elsewhere are never touched. It asks first only when a clone holds work nothing
+  else has: uncommitted or untracked files, unpushed commits on any branch,
+  stashes, or a folder that is no repo (`--force` on the command line). The
+  project's record goes to `.trash/<timestamp>-<name>/`: `undelete` brings back
+  its name and paths, so every peer picks up its old conversation (Claude keys
+  them by directory), with each clone cloned again from the origin recorded when
+  it was added, not the contents it had.
 - Every peer's Claude starts knowing the project: its own repo, the other
   sessions and their paths, who leads, the goal, and the claude-peers group that
   reaches them all (`mc-<project>`, like the tmux session), and the tmux session and pane titles so it can read another
@@ -555,7 +561,14 @@ peer's brief; a profile's `brief()` can expand it into the ticket's text.
   when it is waiting on a permission or a question, yellow `✉` when its turn is
   done and it sits idle for the next prompt. Claude Code hooks injected per
   launch (`--settings`) keep a one-word file per peer under
-  `projects/<name>/.attn/`; typing a prompt or a tool running clears it.
+  `projects/<name>/.attn/` (`work`, `ask`, `wait`): a prompt or a tool running
+  makes it `work`. An interrupted turn has no Stop hook, so `work` lapses when
+  Claude Code reports it idle (about a minute) or the session starts again.
+- In the window each agent's entry shows that state: its icon animates while it
+  works, carries a question mark (and the entry turns bold) while it asks, and a
+  check once its turn is done. A set gets this from `<base>-working-01.svg`…,
+  `<base>-asking.svg`, `<base>-done.svg` (`<base>`: `docker`, `console`) and
+  `badge-claude.svg`, drawn over the corner; a set without them stays still.
 - `up` never kills a Claude it didn't start; take-over is explicit.
 - Error messages never echo command lines (pane environments carry tokens).
 - Conversation ids are the durable handle; transcripts are Claude Code's own

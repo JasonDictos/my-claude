@@ -304,7 +304,7 @@ const attnBadge = (a: Attention) => attentionMark(a).trim();
 // Icon sets: the window's own, and folders of the user's (to try a revision without a build).
 const iconSets = (): string[] => {
   const mine = (() => { try { return readdirSync(join(CONFIG_DIR, "icons"), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort(); } catch { return []; } })();
-  return [...new Set(["v2", "classic", ...mine])];
+  return [...new Set(["v4", "v2", "classic", ...mine])];
 };
 // One spelling per key ("ctrl+shift+n", "Shift+Ctrl+N": the same), to compare keys by.
 export const normKey = (k: string): string => {
@@ -675,7 +675,7 @@ class Driver {
     for (const s of snaps) for (const peer of s.peers) {
       const key = `${s.project.name}/${peer.repo}`;
       const was = this.attn.get(key) ?? null;
-      if (peer.attn && peer.attn !== was) this.notify(peer.attn === "ask" ? `${key} is waiting for an answer` : `${key} finished its turn`, { alert: true });
+      if ((peer.attn === "ask" || peer.attn === "wait") && peer.attn !== was) this.notify(peer.attn === "ask" ? `${key} is waiting for an answer` : `${key} finished its turn`, { alert: true });
       this.attn.set(key, peer.attn);
     }
   }
@@ -690,7 +690,7 @@ class Driver {
       ? [act("project.open", "Show", "", true), act("project.hide", "Close its tab", "h", this.shown.has(name)), sep,
          act("project.add", "Add repos…", "a"), act("project.chat", "Chat with the peers", "c"), act("project.brief", "Brief the peers again", "b", !!p.lead)]
       : [act("project.open", "Start", "u", p.peers.length > 0), sep, act("project.add", "Add repos…", "a")];
-    actions.push(act("project.ticket", "Ticket…", "t"), act("project.goal", "Goal…", "g"), act("project.color", "Color…"),
+    actions.push(act("project.files", "Open folder", "f"), act("project.ticket", "Ticket…", "t"), act("project.goal", "Goal…", "g"), act("project.color", "Color…"),
       act("project.readd", "Re-add a removed repo…", "U", (p.removed ?? []).length > 0), sep);
     if (s.up) actions.push(act("project.down", "Bring down…", "d"));
     actions.push(act("project.rename", "Rename… (F2)"), act("project.delete", "Delete project…", "x"));
@@ -704,7 +704,7 @@ class Driver {
       const pa: Dict[] = [act("peer.focus", peer.pane ? "Go to its pane" : "Start", "", s.up || p.peers.length > 0), sep,
         act("peer.shell", "Shell in its environment", "h", !!peer.pane), act("peer.hostshell", "Host shell in its checkout", "H", s.up),
         act("peer.restart", "Relaunch…", "R", s.up && peer.state !== "occupied"), act("peer.index", "Rebuild symbol index", "i"), sep,
-        act("peer.lead", peer.repo === p.lead ? "Change the goal…" : "Make lead…", "l"), act("peer.model", "Model…", "m")];
+        act("peer.files", "Open folder", "f"), act("peer.lead", peer.repo === p.lead ? "Change the goal…" : "Make lead…", "l"), act("peer.model", "Model…", "m")];
       if (peer.state === "occupied") pa.push(act("peer.takeover", "Take over (stop the session holding it)…"));
       pa.push(sep, act("peer.rename", "Rename… (F2)"), act("peer.remove", "Remove from project…", "x"));
       return {
@@ -714,6 +714,8 @@ class Driver {
         name: peer.label || (isRepo(peer.path) ? peer.repo : `${tilde(peer.path)}/`),
         can: [...projectCan, ...(peer.state === "live" ? ["pane.shell"] : []), ...(s.up ? ["pane.hostshell"] : [])],
         dim: peer.state === "down" || peer.state === "occupied",
+        // what its icon shows; a file left by a Claude that is gone says nothing
+        state: peer.state === "live" ? peer.attn ?? "" : "", bold: peer.attn === "ask",
         badge: attnBadge(peer.attn), badgeColor: attnColor(peer.attn), actions: pa,
         tooltip: `${tilde(peer.path)}\n${peer.state}${peer.model ? " · " + peer.model : ""} · conversation ${peer.session.slice(0, 8)}`,
         // under its repo a shell needs no name of its own: a terminal icon, and where it runs
@@ -814,7 +816,7 @@ class Driver {
         panesPerWindow: { type: "integer", title: "Panes per window (terminal UI)", minimum: 1, maximum: 16, default: 6 },
         panel: { type: "boolean", title: "Side panel (terminal UI)", default: true } } },
       window: { type: "object", title: "Window", order: ["iconSet", "font", "fontSize", "scheme", "tint", "alternate", "transparency", "blur", "panesPerGroup", "scrollback", "copyOnSelect", "panes", "openOnStart", "dropdown", "keepSolo"], properties: {
-        iconSet: { type: "string", title: "Icons", enum: iconSets(), default: "v2",
+        iconSet: { type: "string", title: "Icons", enum: iconSets(), default: "v4",
           description: `Built in: v2 (an agent's icon carries its badge), classic. Another set: a folder of SVGs in ${tilde(join(CONFIG_DIR, "icons"))}/<name>/ (console, docker, console-claude, docker-claude, project, tb-new-project); what it lacks comes from the built-in ones.` },
         font: { type: "string", title: "Terminal font", placeholder: "qterminal's" },
         fontSize: { type: "integer", title: "Font size", minimum: 0, maximum: 48, default: 0, description: "0: qterminal's" },
@@ -833,7 +835,7 @@ class Driver {
     };
     const values: Dict = {
       general: { profile: cfg.profile ?? "host", defaultOrg: cfg.clone?.defaultOrg ?? "", sshKey: cfg.clone?.sshKey ?? "", chatName: cfg.chat?.name ?? "", peersCli: cfg.peers?.cli ?? "", historyLimit: cfg.historyLimit === undefined ? 50000 : Number(cfg.historyLimit) || 0, panesPerWindow: Number(cfg.panesPerWindow) || 6, panel: cfg.panel !== false },
-      window: { iconSet: String(cfg.gui?.iconSet ?? "v2"), font: cfg.gui?.font ?? "", fontSize: Number(cfg.gui?.fontSize) || 0, scheme: cfg.gui?.scheme ?? "", tint: cfg.gui?.tint === undefined ? 35 : Number(cfg.gui.tint) || 0, alternate: cfg.gui?.alternate !== false, hosts: Object.entries((cfg.gui?.hosts ?? {}) as Record<string, { dest?: string; port?: number }>).map(([n, h]) => `${n} ${h.dest}${h.port ? `:${h.port}` : ""}`).join("\n"), transparency: Number(cfg.gui?.transparency) || 0, blur: cfg.gui?.blur !== false, panesPerGroup: Number(cfg.gui?.panesPerGroup) || 4, scrollback: Number(cfg.gui?.scrollback) || 0, copyOnSelect: cfg.gui?.copyOnSelect !== false, dropdown: cfg.gui?.dropdown === true, panes: cfg.gui?.panes === "view" ? "view" : "native", openOnStart: cfg.gui?.openOnStart !== false, keepSolo: cfg.gui?.keepSolo === true },
+      window: { iconSet: String(cfg.gui?.iconSet ?? "v4"), font: cfg.gui?.font ?? "", fontSize: Number(cfg.gui?.fontSize) || 0, scheme: cfg.gui?.scheme ?? "", tint: cfg.gui?.tint === undefined ? 35 : Number(cfg.gui.tint) || 0, alternate: cfg.gui?.alternate !== false, hosts: Object.entries((cfg.gui?.hosts ?? {}) as Record<string, { dest?: string; port?: number }>).map(([n, h]) => `${n} ${h.dest}${h.port ? `:${h.port}` : ""}`).join("\n"), transparency: Number(cfg.gui?.transparency) || 0, blur: cfg.gui?.blur !== false, panesPerGroup: Number(cfg.gui?.panesPerGroup) || 4, scrollback: Number(cfg.gui?.scrollback) || 0, copyOnSelect: cfg.gui?.copyOnSelect !== false, dropdown: cfg.gui?.dropdown === true, panes: cfg.gui?.panes === "view" ? "view" : "native", openOnStart: cfg.gui?.openOnStart !== false, keepSolo: cfg.gui?.keepSolo === true },
     };
     sections.remote = { type: "object", title: "Remote", description: "Other machines' projects in a window here, over ssh. The other machine needs my-claude and tmux; its daemon's own ssh port (2222) or its sshd will do.", order: ["hosts"], properties: {
         hosts: { type: "string", format: "multiline", title: "Machines", description: "One per line: a name, then user@host[:port]. Each one's projects join this window when it is connected (the Connect menu), and it gets a \"my-claude <name>\" launcher in the application menu. Example: server you@server:2222" },
@@ -894,7 +896,7 @@ class Driver {
       historyLimit: Number(g.historyLimit) === 50000 ? null : Math.max(0, Number(g.historyLimit) || 0),
       panesPerWindow: Number(g.panesPerWindow) === 6 ? null : Number(g.panesPerWindow) || null,
       panel: g.panel === false ? false : null,
-      gui: { ...(keyRows ? { keys, keysOff: keysOff?.length ? keysOff : null } : {}), iconSet: !w.iconSet || w.iconSet === "v2" ? null : String(w.iconSet), font: blank(w.font), fontSize: Number(w.fontSize) || null, scheme: blank(w.scheme), tint: w.tint === undefined || Number(w.tint) === 35 ? null : Math.max(0, Math.min(100, Number(w.tint) || 0)), alternate: w.alternate === false ? false : null, transparency: Number(w.transparency) > 0 ? Math.min(95, Number(w.transparency)) : null, blur: w.blur === false ? false : null, panesPerGroup: !Number(w.panesPerGroup) || Number(w.panesPerGroup) === 4 ? null : Math.max(1, Math.min(16, Number(w.panesPerGroup))), scrollback: Number(w.scrollback) > 0 ? Number(w.scrollback) : null, copyOnSelect: w.copyOnSelect === false ? false : null, panes: w.panes === "view" ? "view" : null, openOnStart: w.openOnStart === false ? false : null, dropdown: w.dropdown === true ? true : null, keepSolo: w.keepSolo === true ? true : null },
+      gui: { ...(keyRows ? { keys, keysOff: keysOff?.length ? keysOff : null } : {}), iconSet: !w.iconSet || w.iconSet === "v4" ? null : String(w.iconSet), font: blank(w.font), fontSize: Number(w.fontSize) || null, scheme: blank(w.scheme), tint: w.tint === undefined || Number(w.tint) === 35 ? null : Math.max(0, Math.min(100, Number(w.tint) || 0)), alternate: w.alternate === false ? false : null, transparency: Number(w.transparency) > 0 ? Math.min(95, Number(w.transparency)) : null, blur: w.blur === false ? false : null, panesPerGroup: !Number(w.panesPerGroup) || Number(w.panesPerGroup) === 4 ? null : Math.max(1, Math.min(16, Number(w.panesPerGroup))), scrollback: Number(w.scrollback) > 0 ? Number(w.scrollback) : null, copyOnSelect: w.copyOnSelect === false ? false : null, panes: w.panes === "view" ? "view" : null, openOnStart: w.openOnStart === false ? false : null, dropdown: w.dropdown === true ? true : null, keepSolo: w.keepSolo === true ? true : null },
     };
     for (const [k, section] of Object.entries(v)) {
       if (!k.startsWith("profile:")) continue;
@@ -927,7 +929,7 @@ class Driver {
   }
   private applyLook(cfg: Dict): void {
     const g = cfg.gui ?? {};
-    const set = String(g.iconSet ?? "v2"), dir = join(CONFIG_DIR, "icons", set);
+    const set = String(g.iconSet ?? "v4"), dir = join(CONFIG_DIR, "icons", set);
     this.send({ op: "look", iconSet: set, iconDir: existsSync(dir) ? dir : "", scrollback: Number(g.scrollback) > 0 ? Number(g.scrollback) : -1, copyOnSelect: g.copyOnSelect !== false, dropdown: g.dropdown === true, clipboardFromPrograms: g.clipboardFromPrograms !== false,
       seedLines: Math.max(0, Math.min(2000000, g.seedLines === undefined ? 50000 : Number(g.seedLines) || 0)),
       perGroup: Math.max(1, Math.min(16, Number(g.panesPerGroup) || 4)), transparency: Math.max(0, Math.min(95, Number(g.transparency) || 0)), blur: g.blur !== false, scheme: g.scheme ?? "", tint: g.tint === undefined ? 35 : Math.max(0, Math.min(100, Number(g.tint) || 0)), alternate: g.alternate !== false, scrollbackCapGB: Number(g.scrollbackCapGB) > 0 ? Number(g.scrollbackCapGB) : 20 });
@@ -1035,7 +1037,7 @@ class Driver {
     if (!s) return;
     const missing = s.peers.some((x) => x.state === "down");
     if (!s.up || missing) {
-      if (!s.project.peers.length) throw new Error(`${name} has no repos yet: add some first`);
+      if (!s.project.peers.length) throw new Error(`${name} is unconfigured`);
       // a conversation already open in a Claude my-claude did not start: offer to take it over, up front
       const taken: string[] = [];
       for (const x of s.peers.filter((y) => y.state === "occupied")) {
@@ -1111,6 +1113,9 @@ class Driver {
       case "project.add": return this.projectAdd(project());
       case "project.ticket": return this.projectTicket(project());
       case "project.goal": return this.projectGoal(project());
+      // the window opens it: it knows which machine the folder is on
+      case "project.files": return this.send({ op: "browse", path: join(PROJECTS, project()) });
+      case "peer.files": { const repo = peer(); const at = this.snap(name)?.peers.find((x) => x.repo === repo)?.path; if (at) this.send({ op: "browse", path: at }); return; }
       case "project.color": return this.projectColor(project());
       case "project.readd": return this.projectReadd(project());
       case "project.delete": return this.projectDelete(project());
@@ -1538,11 +1543,23 @@ class Driver {
     await this.work(name, `re-adding ${v.repo}…`, async () => { const p = await core.readd(name, String(v.repo), (m) => this.progress(name, m)); await core.syncGroupNow(name); this.notify(`${p.repo} is back in ${name} (same conversation)`); });
   }
 
+  // Deleting asks only when it would lose work nothing else has (a clone's changes, commits,
+  // stashes, or a folder that is no repo); otherwise it just goes, off the disk.
   private async projectDelete(name: string): Promise<void> {
-    const clones = core.clonesOf(name);
-    const text = `${clones.length ? `Its clones (${clones.join(", ")}) move to the trash with it. ` : ""}Its sessions stop. Conversations stay on disk, and Undelete brings the project back with the same paths.`;
-    if (!(await this.confirm(`Delete project ${name}?`, text, "Delete"))) return;
-    await this.work(name, `deleting ${name}…`, async () => { const d = await core.deleteProject(name, true); this.notify(`${name} moved to ${tilde(d)}`); });
+    const lost = await this.checking(name, () => core.projectLosses(name));
+    const list = lost.map((x) => `• ${x.repo}: ${x.why.join(", ")}`).join("\n");
+    if (lost.length && !(await this.confirm(`Delete project ${name}?`, `This deletes work nothing else has:\n${list}\n\nIts clones are deleted from disk; repos linked from elsewhere stay. Undelete brings back its paths and conversations, not their contents.`, "Delete anyway"))) return;
+    await this.work(name, `deleting ${name}…`, async () => {
+      const { done } = await core.deleteProject(name, true);
+      this.notify(`${name} deleted`);
+      void done.then((left) => { if (left.length) this.notify(left.join("; "), { alert: true }); });
+    });
+  }
+
+  // What deleting would lose, with the user told why nothing happens yet (git can take a moment).
+  private async checking<T>(name: string, f: () => Promise<T>): Promise<T> {
+    this.send({ op: "busy", text: `${name}: checking for unpushed work…` });
+    try { return await f(); } finally { this.showBusy(); }
   }
 
   private async peerRestart(name: string, repo: string): Promise<void> {
@@ -1569,8 +1586,13 @@ class Driver {
   }
 
   private async peerRemove(name: string, repo: string): Promise<void> {
-    if (!(await this.confirm(`Remove ${repo} from ${name}?`, "Its Claude session ends and its pane and shells close. The conversation stays on disk; Re-add brings the peer back with it.", "Remove"))) return;
-    await this.work(name, `removing ${repo}…`, async () => { const note = await core.rmPeer(name, repo); await core.syncGroupNow(name); this.notify(`removed ${repo} from ${name}${note ? "; " + note : ""}`); });
+    const why = await this.checking(repo, () => core.peerLosses(name, repo));
+    if (why.length && !(await this.confirm(`Remove ${repo} from ${name}?`, `Its clone is deleted from disk, and with it work nothing else has: ${why.join(", ")}.\n\nRe-add brings the peer back on the same conversation, cloned afresh.`, "Delete anyway"))) return;
+    await this.work(name, `removing ${repo}…`, async () => {
+      const note = await core.rmPeer(name, repo, { force: true, wait: false });
+      await core.syncGroupNow(name);
+      this.notify(`removed ${repo} from ${name}${note ? "; " + note : ""}`);
+    });
   }
 
   // Ctrl+Shift+X: what prefix+x does. A peer's own pane removes the peer; anything else closes.

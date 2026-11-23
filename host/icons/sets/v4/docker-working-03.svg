@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" role="img" aria-label="Docker agent working" shape-rendering="geometricPrecision">
+<path d="M16.5 12.3 C18.3 11.5 19.4 9.0 20.0 5.60 C20.8 9.52 22.0 7.33 23.4 6.43 C23.1 11.08 21.0 13.38 18.2 14.0 Z" fill="#31FBE2" stroke="#0D3540" stroke-width=".85" stroke-linejoin="miter"/>
+
+    <g fill="#31FBE2" stroke="#0D3540" stroke-width=".55" stroke-linejoin="miter">
+      <rect x="3.8" y="9.1" width="3.2" height="2.9"/>
+      <rect x="7.1" y="9.1" width="3.2" height="2.9"/>
+      <rect x="10.4" y="9.1" width="3.2" height="2.9"/>
+      <rect x="13.7" y="9.1" width="3.2" height="2.9"/>
+      <rect x="5.45" y="6.15" width="3.2" height="2.9"/>
+      <rect x="8.75" y="6.15" width="3.2" height="2.9"/>
+      <rect x="12.05" y="6.15" width="3.2" height="2.9"/>
+      <rect x="7.1" y="3.2" width="3.2" height="2.9"/>
+      <rect x="10.4" y="3.2" width="3.2" height="2.9"/>
+    </g>
+    <path d="M1.45 12.05 H16.7 C18.2 12.05 19.0 11.7 19.8 10.9 L21.0 13.3 C20.7 15.2 19.2 16.9 17.1 17.4 H15.5 C14.3 20.1 11.75 22.3 8.35 22.3 C4.35 22.3 1.9 19.8 1.1 16.4 C.72 14.7 .85 13.0 1.45 12.05 Z" fill="#31FBE2" stroke="#0D3540" stroke-width=".85" stroke-linejoin="miter"/>
+    <path d="M2.5 13.12 H17.6" stroke="#A5FFF4" stroke-width=".8" opacity=".9"/>
+    <rect x="3.25" y="14.0" width="1.1" height="1.1" fill="#0C1A23" opacity=".76"/>
+    <!-- small console window inside the whale; docker stays dominant -->
+    <rect x="5.2" y="16" width="6.25" height="4.65" fill="#0C1A23" stroke="#0D3540" stroke-width=".7"/>
+    <path d="M6.45 17.35 L7.85 18.25 L6.45 19.15" fill="none" stroke="#31FBE2" stroke-width=".9" stroke-linecap="square" stroke-linejoin="miter"/>
+    <path d="M8.5 19.15 H10.2" stroke="#31FBE2" stroke-width=".9" stroke-linecap="square"/>
+</svg>

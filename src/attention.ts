@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Jason Dictos - my-claude, https://github.com/JasonDictos/my-claude
-// Does a peer need the user? Hooks injected per launch write "ask" or "wait" to a file per peer
-// under projects/<name>/.attn/; plain shell, so they work in a container without bun.
+// What a peer is up to, for the user: hooks injected per launch write "work", "ask" or "wait" to
+// a file per peer under projects/<name>/.attn/; plain shell, so they work in a container without bun.
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { PROJECTS } from "./store.ts";
 import { shq } from "./sh.ts";
 
-export type Attention = "ask" | "wait" | null;
+export type Attention = "work" | "ask" | "wait" | null;
 
 const dir = (name: string) => join(PROJECTS, name, ".attn");
 const file = (name: string, repo: string) => join(dir(name), repo);
@@ -15,7 +15,7 @@ const file = (name: string, repo: string) => join(dir(name), repo);
 export function attention(name: string, repo: string): Attention {
   try {
     const v = readFileSync(file(name, repo), "utf8").trim();
-    return v === "ask" || v === "wait" ? v : null;
+    return v === "work" || v === "ask" || v === "wait" ? v : null;
   } catch {
     return null;
   }
@@ -36,13 +36,16 @@ export function projectAttention(name: string, repos: string[]): Attention {
 export function attentionSettings(name: string, repo: string): string {
   const f = shq(file(name, repo));
   const set = (v: string) => ({ type: "command", command: `mkdir -p ${shq(dir(name))} && printf ${v} > ${f}` });
-  const clear = { type: "command", command: `rm -f ${f}` };
+  // Stop never comes for an interrupted turn, nor for a session that died: "work" ends there too
+  const idle = { type: "command", command: `[ "$(cat ${f} 2>/dev/null)" = work ] && rm -f ${f}; true` };
   return JSON.stringify({
     hooks: {
-      Notification: [{ matcher: "permission_prompt|elicitation_dialog", hooks: [set("ask")] }],
+      Notification: [{ matcher: "permission_prompt|elicitation_dialog", hooks: [set("ask")] }, { matcher: "idle_prompt", hooks: [idle] }],
       Stop: [{ hooks: [set("wait")] }],
-      UserPromptSubmit: [{ hooks: [clear] }],
-      PostToolUse: [{ hooks: [clear] }],
+      UserPromptSubmit: [{ hooks: [set("work")] }],
+      PostToolUse: [{ hooks: [set("work")] }],
+      // not on "compact": that one comes mid-turn
+      SessionStart: [{ matcher: "startup|resume", hooks: [idle] }],
     },
   });
 }

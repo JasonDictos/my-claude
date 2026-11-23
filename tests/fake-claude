@@ -2,6 +2,17 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Jason Dictos - my-claude, https://github.com/JasonDictos/my-claude
 # Stand-in for claude in tests: record argv, then idle like a session would.
+# Like claude, --mcp-config takes every argument up to the next option: a prompt left there is
+# one more config, and claude stops.
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+  [[ ${args[i]} == --mcp-config ]] || continue
+  for ((j = i + 1; j < ${#args[@]}; j++)); do
+    a=${args[j]}
+    [[ $a == -* ]] && break
+    [[ $a == \{* || -f $a ]] || { echo "Error: Invalid MCP configuration: MCP config file not found: $PWD/$a" >&2; exit 1; }
+  done
+done
 echo "$PWD $*" >> "${FAKE_CLAUDE_LOG:?}"
 # Look alive for demos: a canned transcript if one exists for this repo, then a prompt line.
 say="${FAKE_CLAUDE_SAY:-}/$(basename "$PWD").txt"

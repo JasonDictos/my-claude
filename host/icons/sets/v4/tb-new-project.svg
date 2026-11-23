@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" role="img" aria-label="My-Claude project icon" shape-rendering="geometricPrecision">
+<g transform="scale(0.375)">
+  <!-- base project icon -->
+  <path d="M6 18 V13 H21 L26 18 H56 V24 H6 Z" fill="#E3A833" stroke="#25313A" stroke-width="2" stroke-linejoin="miter"/>
+  <path d="M8 15 H20 L25 20 H54 V22 H8 Z" fill="#FFF0A8"/>
+  <path d="M6 24 H58 V54 H6 Z" fill="#F4C34A" stroke="#25313A" stroke-width="2"/>
+  <path d="M8 26 H56 V29 H8 Z" fill="#FFF0A8" opacity="0.75"/>
+  <path d="M10 31 H54 V50 H10 Z" fill="#FFDA69"/>
+  <rect x="14" y="28" width="37" height="22" fill="#0C1A23" stroke="#1D4854" stroke-width="2"/>
+  <path d="M16 30 H49" stroke="#31FBE2" stroke-width="2" opacity="0.85"/>
+  <rect x="28" y="36" width="8" height="6" fill="#31FBE2"/>
+  <rect x="18" y="34" width="6" height="5" fill="#31FBE2"/>
+  <rect x="40" y="34" width="6" height="5" fill="#31FBE2"/>
+  <rect x="21" y="43" width="6" height="5" fill="#31FBE2"/>
+  <rect x="37" y="43" width="6" height="5" fill="#31FBE2"/>
+  <path d="M24 36 H28 M36 36 H40 M24 45 H28 M36 45 H37" stroke="#31FBE2" stroke-width="2" stroke-linecap="square"/>
+  <path d="M32 42 V45" stroke="#31FBE2" stroke-width="2" stroke-linecap="square"/>
+  <path d="M32 36 V34" stroke="#31FBE2" stroke-width="2" stroke-linecap="square"/>
+
+  <!-- plus badge, clear at toolbar sizes -->
+  <circle cx="50" cy="50" r="10" fill="#0C1A23" stroke="#31FBE2" stroke-width="2.4"/>
+  <path d="M50 45 V55 M45 50 H55" stroke="#31FBE2" stroke-width="3" stroke-linecap="square"/>
+</g>
+</svg>

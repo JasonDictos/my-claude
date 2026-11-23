@@ -15,7 +15,7 @@ const USAGE = `usage: my-claude [cui] [--remote user@host] <command> [args]   (n
   add    <project> <spec> [<spec>...] [--model M] [--takeover]
          spec: <path> | <repo> | <org>/<repo> | <git url> | <PR url>, each with optional --branch B --name N
          a path is symlinked into projects/<project>/; anything else is cloned there fresh
-  rm     <project> <repo>                remembered: readd puts it back with the same path and conversation
+  rm     <project> <repo> [--force]      its clone is deleted (a linked repo only unlinked); readd: same path and conversation
   readd  <project> [<repo>]              re-add a removed repo (no repo: list what was removed)
   up     <project> [--no-attach] [--takeover]   --takeover: a conversation open in a Claude started elsewhere moves here
   attach <project> [<repo>]
@@ -30,7 +30,7 @@ const USAGE = `usage: my-claude [cui] [--remote user@host] <command> [args]   (n
   index  <project> [<repo>]              rebuild the ctags symbol index (automatic at launch)
   restart  <project> <repo>              stop the peer's claude and start it again in the same pane, same conversation
   takeover <project> <repo>              kill the stranger occupying the repo, launch the peer
-  delete <project> [--force]             down + move the project dir to .trash/ (conversations kept)
+  delete <project> [--force]             down + its clones deleted, the record to .trash/ for undelete (conversations kept)
   undelete [<project>]                   bring a deleted project back; no project: list .trash/
   layout <project> [grid|solo]           grid: tiled tmux windows and the side panel (the terminal UI);
                                          solo: one pane per window, as the window shows it
@@ -163,10 +163,11 @@ async function main(argv: string[]): Promise<number> {
         .then(async (peers) => { for (const peer of peers) console.log(`added ${peer.repo} (${peer.role}) to ${project} at ${peer.path}`); await core.syncGroupNow(project); return 0; });
     }
     case "rm": {
-      if (rest.length !== 2) usage();
-      const note = await core.rmPeer(rest[0], rest[1]);
-      console.log(`removed ${rest[1]} from ${rest[0]} (conversation kept on disk${note ? "; " + note : ""})`);
-      return core.syncGroupNow(rest[0]).then(() => 0);
+      const { opts, pos } = parse(rest, [], ["--force"]);
+      if (pos.length !== 2) usage();
+      const note = await core.rmPeer(pos[0], pos[1], { force: !!opts.force });
+      console.log(`removed ${pos[1]} from ${pos[0]} (conversation kept on disk${note ? "; " + note : ""})`);
+      return core.syncGroupNow(pos[0]).then(() => 0);
     }
     case "up": {
       const { opts, pos } = parse(rest, [], ["--no-attach", "--takeover"]);
@@ -243,10 +244,15 @@ async function main(argv: string[]): Promise<number> {
       await core.takeover(rest[0], rest[1]);
       console.log(`${rest[1]} taken over`);
       return 0;
-    case "delete":
-      if (rest.length < 1 || rest.length > 2) usage();
-      console.log(`deleted ${rest[0]} -> ${await core.deleteProject(rest[0], rest[1] === "--force")} (conversations kept on disk)`);
-      return 0;
+    case "delete": {
+      const { opts, pos } = parse(rest, [], ["--force"]);
+      if (pos.length !== 1) usage();
+      const { record, done } = await core.deleteProject(pos[0], !!opts.force);
+      const left = await done;
+      for (const l of left) console.error(l);
+      console.log(`deleted ${pos[0]}; its record is in ${record} for undelete (conversations kept on disk)`);
+      return left.length ? 1 : 0;
+    }
     case "_click":
       await core.click(rest[0] ?? "", rest[1] ?? "");
       return 0;

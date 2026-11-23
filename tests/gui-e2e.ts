@@ -116,6 +116,52 @@ if (r1.node !== "r:demo/r1") fail("pane should point at its sidebar entry", r1);
   if (!existsSync(mark)) fail("a question should stay until it is answered");
   rmSync(mark);
 }
+// an agent's state on its entry: frames while it works, stills when it asks (bold) or is done.
+// r2: the keyboard stays in r1, so r2's finished turn is not read the moment it shows.
+{
+  u.send({ op: "focus", id: r1.id });
+  await u.shows("r1 with the keyboard", (x) => x.terminals.find((t: any) => t.id === r1.id)?.active === true);
+  const mark = join(root, "projects", "demo", ".attn", "r2");
+  const node = (x: any) => x.nodes.find((n: any) => n.id === "r:demo/r2");
+  writeFileSync(mark, "work");
+  await u.shows("r2 working", (x) => node(x)?.state === "work");
+  const icons = new Set<string>();
+  for (const t0 = Date.now(); Date.now() - t0 < 1500; await Bun.sleep(40)) icons.add(node(await u.list())?.icon);
+  if (icons.size < 3 || ![...icons].every((i) => /^console-working-\d\d$/.test(i))) fail("a working agent's icon should step through its frames", [...icons]);
+  writeFileSync(mark, "ask");
+  await u.shows("r2 asking: its still, in bold", (x) => node(x)?.state === "ask" && node(x)?.icon === "console-asking" && node(x)?.bold === true);
+  writeFileSync(mark, "wait");
+  await u.shows("r2 done", (x) => node(x)?.state === "wait" && node(x)?.icon === "console-done" && node(x)?.bold === false);
+  rmSync(mark);
+  await u.shows("r2 idle", (x) => node(x)?.state === "" && node(x)?.icon === "console");
+  // an agent launched before the hooks knew "work": its screen's last line says it is busy
+  const r2 = (await u.list()).terminals.find((t: any) => t.title === "r2");
+  u.send({ op: "send", id: r2.id, text: "  bypass permissions on · esc to interrupt" });
+  await u.shows("r2 busy by its footer", (x) => node(x)?.state === "work");
+  u.send({ op: "send", id: r2.id, text: "\rx\rx\rx\r" });
+  await u.shows("r2 idle once the footer is gone", (x) => node(x)?.state === "");
+}
+// Open folder: the repo's, or the project's, in the desktop's file manager (tests only note it)
+{
+  const press = async (keys: string) => { u.send({ op: "key", keys }); return u.until("keyed", (m: any) => m.keys === keys); };
+  const r1path = record("demo").peers.find((x: any) => x.repo === "r1").path;
+  u.act("peer.files", { node: "r:demo/r1" });
+  await u.shows("r1's folder opened", (x) => x.opened === `file://${r1path}`);
+  u.act("project.files", { node: "p:demo" });
+  await u.shows("the project's folder opened", (x) => x.opened === `file://${join(root, "projects", "demo")}`);
+  // in the list its key is Ctrl+F; a bare f is the list's type-to-find
+  u.send({ op: "focus", id: r1.id });
+  await u.shows("r1 with the keyboard", (x) => x.terminals.find((t: any) => t.id === r1.id)?.active === true);
+  if ((await press("Ctrl+`")).focus !== "QTreeWidget") fail("Ctrl+` should put the keyboard in the project list");
+  u.send({ op: "sidebar", select: "r:demo/r1" });
+  await u.shows("the list on r1", (x) => x.selected === "r:demo/r1");
+  await press("f");
+  await Bun.sleep(300);
+  if ((await u.list()).opened !== `file://${join(root, "projects", "demo")}`) fail("a bare f should not run Open folder");
+  await press("Ctrl+F");
+  await u.shows("Ctrl+F in the list opens r1's folder", (x) => x.opened === `file://${r1path}`);
+  await press("Ctrl+`");
+}
 // what is typed reaches the pane's program (here: the tty echoes it), and shows
 u.send({ op: "send", id: r1.id, text: "typed-in-r1" });
 for (let i = 0; ; i++) {
@@ -228,17 +274,34 @@ await u.answer({});
 await u.shows("the shell gone", (x) => titles(x) === "r1,r2");
 if (record("demo").peers.length !== 2) fail("closing a shell must not remove a peer");
 
-// --- add a repo from the sidebar, then remove it again (cancel first)
+// --- add a repo from the sidebar, then remove it: one linked from elsewhere goes at once and stays
+// on disk; a clone is deleted, and asks first when it holds work nothing else has (cancel keeps it)
 u.act("project.add", { node: "p:demo" });
 await u.answer({ spec: join(tmp, "r3") });
 l = await u.shows("r3 added", (x) => titles(x) === "r1,r2,r3");
-u.act("peer.remove", { node: "r:demo/r3" });
-await u.answer(null);
-await Bun.sleep(500);
-if (record("demo").peers.length !== 3) fail("a cancelled removal removed");
 u.act("pane.close", { id: l.terminals.find((t: any) => t.title === "r3").id, focus: "term", tab: "demo" }); // on a peer's pane: removes the peer
-await u.answer({});
-await u.shows("r3 removed", (x) => titles(x) === "r1,r2");
+await u.shows("r3 removed, nothing asked", (x) => titles(x) === "r1,r2" && x.asks.length === 0);
+if (!existsSync(join(tmp, "r3"))) fail("a linked repo must stay on disk");
+{
+  const git = (...a: string[]) => { if (Bun.spawnSync(["git", ...a]).exitCode !== 0) fail(`git ${a.join(" ")}`); };
+  git("init", "-q", "-b", "main", join(tmp, "upstream"));
+  git("-C", join(tmp, "upstream"), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "one");
+  git("clone", "-q", "--bare", join(tmp, "upstream"), join(tmp, "origin.git"));
+  u.act("project.add", { node: "p:demo" });
+  await u.answer({ spec: "file://" + join(tmp, "origin.git") });
+  await u.shows("the clone added", (x) => titles(x) === "r1,r2,origin");
+  const clone = join(root, "projects", "demo", "origin");
+  writeFileSync(join(clone, "wip"), "x");
+  u.act("peer.remove", { node: "r:demo/origin" });
+  await u.answer(null);
+  await Bun.sleep(500);
+  if (!record("demo").peers.some((x: any) => x.repo === "origin") || !existsSync(join(clone, "wip"))) fail("a cancelled removal removed");
+  u.act("peer.remove", { node: "r:demo/origin" });
+  await u.answer({});
+  await u.shows("the clone removed", (x) => titles(x) === "r1,r2");
+  for (let i = 0; i < 50 && existsSync(clone); i++) await Bun.sleep(100);
+  if (existsSync(clone)) fail("a removed clone should be off the disk");
+}
 if (record("demo").peers.length !== 2 || record("demo").removed?.[0]?.repo !== "r3") fail("removal not recorded", record("demo"));
 u.act("project.ticket", { node: "p:demo" });
 await u.answer({ ticket: "abc-5" });
@@ -349,8 +412,7 @@ u.act("project.down", { node: "p:second-one" });
 await u.answer({});
 await u.shows("second-one down", (x) => x.tabs.join() === "demo,third");
 if (tmux("list-sessions", "-F", "#{session_name}").includes("second-one")) fail("down left sessions", tmux("list-sessions", "-F", "#{session_name}"));
-u.act("project.delete", { node: "p:third" });
-await u.answer({});
+u.act("project.delete", { node: "p:third" }); // nothing of its would be lost: nothing to ask
 await u.shows("third deleted", (x) => x.tabs.join() === "demo" && !x.nodes.some((n: any) => n.id === "p:third"));
 // and Undelete brings it back (its choices are "<machine>|<trash dir>", "." being this one)
 u.act("app.undelete");
@@ -381,7 +443,6 @@ await u.shows("r6 added and taken over", (x) => titles(x, "held") === "r5,r6", 3
 for (let i = 0; i < 50 && stranger2.exitCode === null && stranger2.signalCode === null; i++) await Bun.sleep(100);
 if (stranger2.exitCode === null && stranger2.signalCode === null) { stranger2.kill(); fail("adding a repo should take over the session holding it"); }
 u.act("project.delete", { node: "p:held" });
-await u.answer({});
 await u.shows("held deleted", (x) => !x.nodes.some((n: any) => n.id === "p:held"));
 
 // --- the shortcut bar (F1, or Alt held): every key of what has the focus
@@ -542,6 +603,20 @@ await host!.exited;
     (x) => x.current === "demo" && term(x, r2.id)?.zoomed === true && dock(x)?.visible === true && term(x, con.id)?.active === true, 20000);
   u.send({ op: "send", id: con.id, text: "exit\r" });
   await u.shows("no consoles", (x) => !dock(x) || dock(x).count === 0);
+  // a working agent's frames step while the window is out of sight too: on Wayland it never
+  // learns it is back on screen (last: offscreen, a hidden window does not come back active)
+  {
+    const mark = join(root, "projects", "demo", ".attn", "r2");
+    const node = (x: any) => x.nodes.find((n: any) => n.id === "r:demo/r2");
+    writeFileSync(mark, "work");
+    await u.shows("r2 working", (x) => node(x)?.state === "work");
+    u.send({ op: "toggle" });
+    await u.shows("the window hidden", (x) => x.shown === false);
+    const unseen = new Set<string>();
+    for (const t0 = Date.now(); Date.now() - t0 < 1000; await Bun.sleep(40)) unseen.add(node(await u.list())?.icon);
+    if (unseen.size < 3) fail("frames should step while the window is hidden", [...unseen]);
+    rmSync(mark);
+  }
   u.send({ op: "quit" });
   await host!.exited;
 }

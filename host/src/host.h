@@ -345,9 +345,19 @@ private:
   class QToolBar* toolbar_ = nullptr; // the operations over the list
   QIcon toolIcon(const QString& name) const;
   // icons by name from the chosen set: the user's folder for it, the built-in set, then classic
-  QString iconSet_ = "v2", iconDir_;
+  QString iconSet_ = "v4", iconDir_;
+  QString lastOpened_; // under MC_TERM_TEST: the folder Open folder would have shown
+  QString setFile(const QString& name) const; // the file the set has for a name, or ""
   QIcon setIcon(const QString& name) const;
   QIcon kindIcon(const QString& kind) const;
+  // an agent's entry by what it is doing ("work", "ask", "wait", "" idle); key: what it drew
+  QIcon stateIcon(const QString& kind, const QString& state, int frame, QString* key) const;
+  int frameCount(const QString& base) const;
+  mutable QHash<QString, QIcon> stateIcons_;
+  mutable QHash<QString, int> frameCounts_;
+  QTimer* animTimer_ = nullptr; // steps the working agents' frames
+  int frame_ = 0;
+  QHash<QString, QString> working_; // list entry -> its kind, while its agent works
   QHash<QString, QSet<QString>> nodeCan_; // per list entry: the toolbar buttons that apply
   QString contextNode();
   void updateToolbar();

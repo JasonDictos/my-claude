@@ -83,7 +83,7 @@ maximised, shownIn[], current, tabs[]}`.
 | `tab` | `tab`, `color`, `focus`, `close`, or `cycle: ±1` | A tab's colour (also the hue of its terminals), focus, close; or step through the tabs. |
 | `tabs` | `order[]` | The order of the tabs. |
 | `zoom` / `minimise` | `id`, `on` | One pane over the whole tab; a pane parked as a button under the grid. |
-| `tree` | `nodes[]`, `select` | The sidebar: `{id, label, badge, dot, dotColor, color, bold, dim, tooltip, actions[], children[]}`. |
+| `tree` | `nodes[]`, `select` | The sidebar: `{id, label, icon, state, badge, dot, dotColor, color, bold, dim, tooltip, actions[], children[]}`. `state` (an agent's: `work`, `ask`, `wait`, or empty) picks its icon's picture; `work` animates. |
 | `sidebar` | `select` | Select an entry, or move the keyboard to the list (and back). |
 | `menu` | `menus[]` | The menu bar: `{title, items[{id, label, shortcuts[], key} or {separator}]}`. `host.*` ids are done by the window, the rest come back as `action`. |
 | `ask` | `id`, `title`, `text`, `schema`, `values`, `ok`, `cancel` | A form dialog from a JSON Schema; the reply is an `answer` event. |

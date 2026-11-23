@@ -46,7 +46,7 @@ const TOOLS: Tool[] = [
     name: "list_projects",
     description: "List my-claude projects with their state and goal.",
     inputSchema: { type: "object", properties: {} },
-    run: async () => JSON.stringify((await core.ls()).map((p) => ({ name: p.name, state: p.state, peers: p.peers, lead: p.lead, goal: p.goal, needs: p.attn })), null, 2),
+    run: async () => JSON.stringify((await core.ls()).map((p) => ({ name: p.name, state: p.state, peers: p.peers, lead: p.lead, goal: p.goal, needs: p.attn === "work" ? null : p.attn })), null, 2),
   },
   {
     name: "project_status",
@@ -56,7 +56,7 @@ const TOOLS: Tool[] = [
       const name = a.project ?? process.env.MY_CLAUDE_PROJECT;
       if (!name) throw new UsageError("no project given and this session is not in one");
       const s = await core.status(name);
-      return JSON.stringify({ name: s.name, group: core.GROUP(s.name), state: s.state, goal: s.goal, lead: s.lead, by: s.by ?? null, peers: s.peers.map((p) => ({ repo: p.repo, path: p.path, role: p.role, live: p.state, needs: p.attn })) }, null, 2);
+      return JSON.stringify({ name: s.name, group: core.GROUP(s.name), state: s.state, goal: s.goal, lead: s.lead, by: s.by ?? null, peers: s.peers.map((p) => ({ repo: p.repo, path: p.path, role: p.role, live: p.state, needs: p.attn === "work" ? null : p.attn })) }, null, 2);
     },
   },
 ];

@@ -2,7 +2,8 @@
 // Copyright (c) 2026 Jason Dictos - my-claude, https://github.com/JasonDictos/my-claude
 // The commands, shared by the CLI, the menu, the MCP server and the window's driver. Child
 // processes are awaited, never blocked on, except where a program IS a pane's foreground job.
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { basename, join } from "node:path";
 import { containerOf, killOccupant, lockInfo, occupantPid, occupantsIndex, peerState, peerStateOf, projectState, whoOf, type PeerState, type ProjectState } from "./live.ts";
@@ -372,9 +373,17 @@ export async function addRepo(name: string, line: string, o: { role?: Role; mode
   return await addPeer(name, path, { role: o.role, model: o.model, repo, takeover: o.takeover, ...(spec.kind === "clone" ? { origin: spec.repo, branch: spec.branch } : {}) });
 }
 
-export async function rmPeer(name: string, repo: string): Promise<string> {
+// Removed means gone from disk: a clone of the project's is deleted (a repo linked from elsewhere
+// only loses its link). Not without force while the clone holds something nothing else has.
+export async function rmPeer(name: string, repo: string, o: { force?: boolean; wait?: boolean } = {}): Promise<string> {
   const p = load(name);
   const peer = peerOf(p, repo);
+  const slot = join(PROJECTS, name, repo);
+  const isClone = !!lstatSync(slot, { throwIfNoEntry: false })?.isDirectory();
+  if (isClone && !o.force) {
+    const why = await losses(slot);
+    if (why.length) die(`${repo}: ${why.join(", ")}; --force deletes it anyway`);
+  }
   p.peers = p.peers.filter((x) => x.repo !== repo);
   // Remembered so it can come back (readd) with the same path and conversation.
   p.removed = [...(p.removed ?? []).filter((x) => x.repo !== repo), { ...peer, when: Date.now() }].slice(-20);
@@ -392,22 +401,91 @@ export async function rmPeer(name: string, repo: string): Promise<string> {
     }
     await closeShellPanes(name, repo);
   }
-  const slot = join(PROJECTS, name, repo);
   const st = lstatSync(slot, { throwIfNoEntry: false });
   if (st?.isSymbolicLink()) {
     unlinkSync(slot);
     return "link removed";
   }
-  return st ? `clone left at ${slot}` : "";
+  if (!st) return "";
+  const done = discard(slot);
+  if (o.wait === false) return "clone deleting";
+  const left = await done;
+  return left ?? "clone deleted";
+}
+
+// What deleting a clone would lose, in words; none when everything in it is pushed.
+export async function losses(path: string): Promise<string[]> {
+  const git = (args: string[]) => sh("git", ["-c", "safe.directory=*", "-C", path, ...args], { ok: true });
+  // its own repo, not one it happens to sit in (my-claude's checkout holds projects/)
+  const top = (await git(["rev-parse", "--show-toplevel"])).trim();
+  if (!top || realpathSync(top) !== realpathSync(path)) return ["not a git repo"];
+  const why: string[] = [];
+  const count = (out: string) => out.split("\n").filter(Boolean).length;
+  const trees = (await git(["worktree", "list", "--porcelain"])).split("\n").filter((l) => l.startsWith("worktree ")).map((l) => l.slice(9));
+  let dirty = 0;
+  for (const t of trees.length ? trees : [path]) dirty += count(await sh("git", ["-c", "safe.directory=*", "-C", t, "status", "--porcelain"], { ok: true }));
+  if (dirty) why.push(`${dirty} uncommitted file${dirty === 1 ? "" : "s"}`);
+  // per branch: commits on no remote whose change is not upstream either (a rebased or amended copy
+  // of pushed work is no loss); upstream is the branch's own, else the remote's default
+  const fallback = (await git(["rev-parse", "--abbrev-ref", "origin/HEAD"])).trim();
+  const heads = (await git(["for-each-ref", "--format=%(refname:short)", "refs/heads"])).split("\n").filter(Boolean);
+  if ((await git(["symbolic-ref", "-q", "HEAD"])).trim() === "") heads.push("HEAD"); // detached
+  for (const b of heads) {
+    const only = (await git(["rev-list", b, "--not", "--remotes"])).split("\n").filter(Boolean);
+    if (!only.length) continue;
+    const base = (await git(["rev-parse", "--abbrev-ref", `${b}@{u}`])).trim() || fallback;
+    const fresh = base ? new Set((await git(["cherry", base, b])).split("\n").filter((l) => l.startsWith("+ ")).map((l) => l.slice(2))) : null;
+    const n = fresh ? only.filter((c) => fresh.has(c)).length : only.length;
+    if (n) why.push(`${n} unpushed commit${n === 1 ? "" : "s"} on ${b === "HEAD" ? "a detached HEAD" : b}`);
+  }
+  const stashes = count(await git(["stash", "list"]));
+  if (stashes) why.push(`${stashes} stash${stashes === 1 ? "" : "es"}`);
+  return why;
+}
+
+// What removing a peer would lose: only a clone of the project's is deleted.
+export async function peerLosses(name: string, repo: string): Promise<string[]> {
+  return clonesOf(name).includes(repo) ? await losses(join(PROJECTS, name, repo)) : [];
+}
+
+// Per clone of the project's, what deleting it would lose (only the ones that would lose something).
+export async function projectLosses(name: string): Promise<{ repo: string; why: string[] }[]> {
+  const out = await Promise.all(clonesOf(name).map(async (repo) => ({ repo, why: await losses(join(PROJECTS, name, repo)) })));
+  return out.filter((x) => x.why.length);
+}
+
+const DELETING = () => join(ROOT, ".deleting");
+
+// Off the disk: moved aside at once (the name is free again), deleted behind that. Null when all of
+// it went; else what is left and why.
+export function discard(path: string): Promise<string | null> {
+  if (!realpathSync(path).startsWith(realpathSync(PROJECTS) + "/")) die(`refusing to delete ${path}: not inside ${PROJECTS}`);
+  mkdirSync(DELETING(), { recursive: true });
+  const dest = join(DELETING(), `${Date.now()}-${basename(path)}`);
+  renameSync(path, dest);
+  return wipe(dest);
+}
+
+async function wipe(dest: string): Promise<string | null> {
+  await rm(dest, { recursive: true, force: true }).catch(() => {});
+  // builds in containers leave root's files behind
+  if (existsSync(dest)) await sh("sudo", ["-n", "rm", "-rf", "--", dest], { ok: true });
+  return existsSync(dest) ? `could not delete all of ${dest}: files of another user, and sudo wants a password` : null;
+}
+
+// Deletions a stopped process left half done.
+export async function sweepDeleting(): Promise<void> {
+  if (!existsSync(DELETING())) return;
+  await Promise.all(readdirSync(DELETING()).map((d) => wipe(join(DELETING(), d))));
 }
 
 // Real (non-symlink) repo dirs under the project tree: fresh clones that may hold work.
 export function clonesOf(name: string): string[] {
   const dir = join(PROJECTS, name);
   if (!existsSync(dir)) return [];
-  // .my-claude holds the symbol indexes, my-claude's own, not a clone.
+  // dot folders are my-claude's own (.my-claude: symbol indexes, .attn: agent states), no clones
   return readdirSync(dir).filter((f) => {
-    if (f === ".my-claude") return false;
+    if (f.startsWith(".")) return false;
     const st = lstatSync(join(dir, f));
     return st.isDirectory() && !st.isSymbolicLink();
   });
@@ -474,14 +552,21 @@ function latestMatching(path: string, prefix: string): string {
   return hits[0].replace(/\.jsonl$/, "");
 }
 
-export async function deleteProject(name: string, force = false): Promise<string> {
+// Deleted means gone from disk: its clones (and anything else in its folder) are deleted, repos
+// linked from elsewhere are left alone, and only the record goes to .trash, for undelete (paths,
+// conversations; not contents). Not without force while a clone holds something nothing else has.
+export async function deleteProject(name: string, force = false): Promise<{ record: string; done: Promise<string[]> }> {
   load(name);
-  const clones = clonesOf(name);
-  if (clones.length && !force) die(`${name} has cloned repos (${clones.join(", ")}); use --force (they go to .trash, not rm -rf)`);
+  if (!force) {
+    const lost = await projectLosses(name);
+    if (lost.length) die(`${name} would lose: ${lost.map((x) => `${x.repo}: ${x.why.join(", ")}`).join("; ")}; --force deletes it anyway`);
+  }
   await tmux.killSession(name);
-  const dest = remove(name);
+  const dirs = [...clonesOf(name), ".my-claude"].map((d) => join(PROJECTS, name, d)).filter((d) => existsSync(d));
+  const done = Promise.all(dirs.map((d) => discard(d))).then((r) => r.filter((x): x is string => !!x));
+  const record = remove(name);
   if (peers.available()) void peers.deleteGroup(GROUP(name));
-  return dest;
+  return { record, done };
 }
 
 // owner/name: gh when logged in (private repos, the user's protocol), else git over https
@@ -792,6 +877,9 @@ export async function snapshot(): Promise<ProjectSnap[]> {
       const pid = pidOf(peer.path, whoOf(p, peer));
       return { ...peer, state: peerStateOf(pane ? Math.max(0, now - pane.start) : null, pid), pane: pane?.id ?? null, attn: attention(p.name, peer.repo), boxed: pid ? !!containerOf(pid) : null };
     });
+    // a busy screen says "work" too: Claudes launched before the hooks wrote it never will
+    const busy = await tmux.busy(peers.filter((x) => x.pane && x.state === "live").map((x) => x.pane as string));
+    for (const x of peers) if (x.attn !== "ask" && x.pane && busy.has(x.pane)) x.attn = "work";
     const state: ProjectState = !up ? "DOWN" : peers.every((x) => x.state === "live") ? "UP" : "PARTIAL";
     const attn: Attention = peers.some((x) => x.attn === "ask") ? "ask" : peers.some((x) => x.attn === "wait") ? "wait" : null;
     return { project: p, up, state, color: projectColor(p.name, p.color).ink, attn, peers, panes: rows };
@@ -849,7 +937,8 @@ function claudeArgs(name: string, peer: Peer): string[] {
   args.push("--append-system-prompt", projectBrief(load(name), peer));
   args.push("--settings", attentionSettings(name, peer.repo));
   args.push("--mcp-config", mcpConfig(ROOT, CONFIG_DIR));
-  if (peer.kickoff && args[0] === "--session-id") args.push(peer.kickoff);
+  // after "--": --mcp-config takes every argument up to the next option, a prompt included
+  if (peer.kickoff && args[0] === "--session-id") args.push("--", peer.kickoff);
   return args;
 }
 

@@ -8,7 +8,7 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 find_package(Qt6 REQUIRED COMPONENTS Widgets Network Svg Test DBus)
 find_package(qtermwidget6 REQUIRED)
-add_executable(mc-term src/main.cpp src/host.cpp src/form.cpp src/syskeys.cpp src/tmuxctl.cpp src/dialect.cpp src/theme.cpp icons/icons.qrc)
+add_executable(mc-term src/main.cpp src/host.cpp src/form.cpp src/syskeys.cpp src/layericon.cpp src/tmuxctl.cpp src/dialect.cpp src/theme.cpp icons/icons.qrc)
 target_link_libraries(mc-term PRIVATE Qt6::Widgets Qt6::Network Qt6::Svg Qt6::Test Qt6::DBus qtermwidget6)
 # Blur behind see-through terminals is asked of KWin with an X11 window property.
 find_package(PkgConfig QUIET)

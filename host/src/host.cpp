@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Jason Dictos - my-claude, https://github.com/JasonDictos/my-claude
 #include "host.h"
 #include "dialect.h"
+#include "layericon.h"
 #include "form.h"
 #include "theme.h"
 #include "tmuxctl.h"
@@ -186,7 +187,17 @@ QString tagOf(const QString& s) {
   const int at = project.lastIndexOf('@');
   return at < 0 ? QString() : project.mid(at + 1);
 }
-const int kHostRole = Qt::UserRole + 2, kSectionRole = Qt::UserRole + 3, kKindRole = Qt::UserRole + 4, kNameRole = Qt::UserRole + 5;
+// A list key as typed in the menus ("f", "H") is pressed as Ctrl+F, Ctrl+Shift+H.
+static QString listKey(const QString& k) {
+  if (k.size() == 1 && k[0].isLetter()) return QString(k[0].isUpper() ? "Ctrl+Shift+" : "Ctrl+") + k.toUpper();
+  return "Ctrl+" + k;
+}
+static bool isListKey(const QKeyEvent* e, const QString& k) {
+  const int mods = int(e->modifiers() & (Qt::ControlModifier | Qt::ShiftModifier | Qt::AltModifier | Qt::MetaModifier));
+  return QKeySequence(listKey(k))[0].toCombined() == (mods | e->key());
+}
+
+const int kHostRole = Qt::UserRole + 2, kSectionRole = Qt::UserRole + 3, kKindRole = Qt::UserRole + 4, kNameRole = Qt::UserRole + 5, kStateRole = Qt::UserRole + 6, kIconKeyRole = Qt::UserRole + 7;
 
 // Another machine's section row, like the caption: "PROJECTS @ " small and grey, the host bold white.
 class SectionDelegate : public QStyledItemDelegate {
@@ -409,6 +420,7 @@ Host::Host(const QString& socketPath, const QString& driverCmd, QWidget* parent)
   caption->setContextMenuPolicy(Qt::CustomContextMenu);
   connect(caption, &QWidget::customContextMenuRequested, this, [this, caption](const QPoint& p) { QMenu* m = createPopupMenu(); m->exec(caption->mapToGlobal(p)); m->deleteLater(); });
   tree_ = new QTreeWidget(dock_);
+  tree_->setIconSize(QSize(24, 24)); // big enough to read an agent's state at a glance
   tree_->setColumnCount(2);
   {
     auto* del = new SectionDelegate(tree_);
@@ -420,6 +432,19 @@ Host::Host(const QString& socketPath, const QString& driverCmd, QWidget* parent)
   tree_->setMouseTracking(true);
   tree_->viewport()->installEventFilter(this);
   connect(tree_, &QTreeWidget::itemEntered, this, [this](QTreeWidgetItem* it, int) { showPreview(it); });
+  animTimer_ = new QTimer(this);
+  animTimer_->setInterval(100); // the frames' pace (manifest: 100 ms)
+  // runs whether or not the window looks shown: Wayland never tells a window it is back on screen
+  // (a stale "minimised" froze the frames), and a few icons per tick cost nothing
+  connect(animTimer_, &QTimer::timeout, this, [this] {
+    ++frame_;
+    for (auto w = working_.cbegin(); w != working_.cend(); ++w)
+      if (QTreeWidgetItem* it = nodeItems_.value(w.key())) {
+        QString key;
+        it->setIcon(0, stateIcon(w.value(), "work", frame_, &key));
+        it->setData(0, kIconKeyRole, key);
+      }
+  });
   previewTimer_ = new QTimer(this);
   previewTimer_->setInterval(333);
   connect(previewTimer_, &QTimer::timeout, this, &Host::refreshPreview);
@@ -834,6 +859,8 @@ void Host::handle(const QJsonObject& m, QLocalSocket* from) {
     if ((m.contains("iconSet") && m.value("iconSet").toString() != iconSet_) || (m.contains("iconDir") && m.value("iconDir").toString() != iconDir_)) {
       iconSet_ = m.value("iconSet").toString(iconSet_);
       iconDir_ = m.value("iconDir").toString(iconDir_);
+      stateIcons_.clear();
+      frameCounts_.clear();
       rebuildTree();
       for (QAction* a : toolbar_->actions()) if (a->property("icon").isValid()) a->setIcon(toolIcon(a->property("icon").toString()));
     }
@@ -986,6 +1013,23 @@ void Host::handle(const QJsonObject& m, QLocalSocket* from) {
     if (m.value("open").toBool()) openSettings();
     return;
   }
+  if (op == "browse") {
+    // a folder in the desktop's file manager; another machine's over sftp (KIO, gvfs)
+    QUrl url = QUrl::fromLocalFile(m.value("path").toString());
+    if (const QString tag = clientTag_.value(from); !tag.isEmpty() && machines_.contains(tag)) {
+      const QStringList& a = machines_[tag].driverArgv;
+      QString dest, port;
+      for (int i = 1; i < a.size(); ++i) {
+        if (a[i] == "-p" && i + 1 < a.size()) port = a[++i];
+        else if ((a[i] == "-o" || a[i] == "-i" || a[i] == "-l" || a[i] == "-F" || a[i] == "-J") && i + 1 < a.size()) ++i;
+        else if (!a[i].startsWith('-')) { dest = a[i]; break; }
+      }
+      url = QUrl("sftp://" + dest + (port.isEmpty() ? QString() : ":" + port) + m.value("path").toString());
+    }
+    if (qEnvironmentVariableIsSet("MC_TERM_TEST")) lastOpened_ = url.toString();
+    else QDesktopServices::openUrl(url);
+    return;
+  }
   if (op == "grab") {
     // A PNG of the window as drawn (or of one open dialog), for tests and bug reports.
     const QString path = m.value("path").toString();
@@ -1112,7 +1156,8 @@ void Host::handle(const QJsonObject& m, QLocalSocket* from) {
                                {"shownIn", QJsonArray::fromStringList(shownIn)}, {"current", d.tabs->currentIndex() >= 0 ? d.tabs->tabText(d.tabs->currentIndex()) : QString()},
                                {"tabs", [&] { QJsonArray a; for (int i = 0; i < d.tabs->count(); ++i) a << d.tabs->tabText(i); return a; }()}});
     }
-    for (auto it = nodeItems_.begin(); it != nodeItems_.end(); ++it) nodes.append(QJsonObject{{"id", it.key()}, {"label", it.value()->text(0)}, {"badge", it.value()->text(1)}});
+    for (auto it = nodeItems_.begin(); it != nodeItems_.end(); ++it) nodes.append(QJsonObject{{"id", it.key()}, {"label", it.value()->text(0)}, {"badge", it.value()->text(1)}, {"state", it.value()->data(0, kStateRole).toString()},
+                                                                                                 {"icon", it.value()->data(0, kIconKeyRole).toString()}, {"bold", it.value()->font(0).bold()}});
     for (auto it = asks_.begin(); it != asks_.end(); ++it) asks.append(it.key());
     QJsonArray tools;
     if (toolbar_) for (QAction* a : toolbar_->actions()) if (!a->data().toString().isEmpty()) tools.append(QJsonObject{{"id", a->data().toString()}, {"enabled", a->isEnabled()}});
@@ -1120,7 +1165,7 @@ void Host::handle(const QJsonObject& m, QLocalSocket* from) {
     const Tab* cur = currentTab();
     reply(from, {{"ev", "list"}, {"terminals", terms}, {"tabs", tabNames}, {"current", cur ? cur->name : QString()}, {"consoles", docks}, {"nodes", nodes}, {"toolbar", tools}, {"overview", overview_ != nullptr},
                  {"asks", asks}, {"actions", acts}, {"selected", currentNode()}, {"sidebar", dock_->isVisible()}, {"driver", driver_ != nullptr},
-                 {"shown", isVisible() && !(windowState() & Qt::WindowMinimized)}, {"fullScreen", isFullScreen()}, {"keyBar", keyBar_ && keyBar_->isVisible()}, {"menuBar", menuBar()->isVisible()}, {"badges", int(badges_.size())}, {"keyBarText", keyBar_ ? keyBar_->text() : QString()}, {"activeWindow", isActiveWindow()}});
+                 {"shown", isVisible() && !(windowState() & Qt::WindowMinimized)}, {"fullScreen", isFullScreen()}, {"keyBar", keyBar_ && keyBar_->isVisible()}, {"menuBar", menuBar()->isVisible()}, {"badges", int(badges_.size())}, {"keyBarText", keyBar_ ? keyBar_->text() : QString()}, {"activeWindow", isActiveWindow()}, {"opened", lastOpened_}});
     return;
   }
   reply(from, {{"ev", "error"}, {"error", "unknown op " + op}});
@@ -2646,6 +2691,7 @@ void Host::setTree(const QJsonArray& nodes) {
   nodeActions_.clear();
   nodeItems_.clear();
   nodeCan_.clear();
+  working_.clear();
   std::function<void(QTreeWidgetItem*, const QJsonObject&)> add = [&](QTreeWidgetItem* parent, const QJsonObject& n) {
     auto* it = parent ? new QTreeWidgetItem(parent) : new QTreeWidgetItem(tree_);
     const QString id = n.value("id").toString();
@@ -2655,7 +2701,15 @@ void Host::setTree(const QJsonArray& nodes) {
     if (id.startsWith("p:")) { QFont f = it->font(0); f.setBold(true); it->setFont(0, f); } // a project: bold in its colour
     if (n.contains("name")) { it->setFlags(it->flags() | Qt::ItemIsEditable); it->setData(0, kNameRole, n.value("name").toString()); }
     if (n.contains("can")) { QSet<QString> can; for (const auto& c : n.value("can").toArray()) can << c.toString(); nodeCan_.insert(id, can); }
-    if (n.contains("icon")) { it->setData(0, kKindRole, n.value("icon").toString()); it->setIcon(0, kindIcon(n.value("icon").toString())); }
+    if (n.contains("icon")) {
+      const QString kind = n.value("icon").toString(), state = n.value("state").toString();
+      QString key;
+      it->setData(0, kKindRole, kind);
+      it->setData(0, kStateRole, state);
+      it->setIcon(0, stateIcon(kind, state, frame_, &key));
+      it->setData(0, kIconKeyRole, key);
+      if (state == "work") working_.insert(id, kind);
+    }
     it->setText(1, n.value("badge").toString());
     it->setToolTip(0, n.value("tooltip").toString());
     if (n.contains("color")) it->setForeground(0, QColor(n.value("color").toString()));
@@ -2668,6 +2722,8 @@ void Host::setTree(const QJsonArray& nodes) {
     it->setExpanded(!collapsed_.contains(id));
   };
   for (const auto& n : nodes) add(nullptr, n.toObject());
+  if (working_.isEmpty()) animTimer_->stop();
+  else if (!animTimer_->isActive()) animTimer_->start();
   // What was selected stays selected; when the keyboard is in a pane, its entry is (it may
   // only now exist: a new pane is named before the list knows it).
   QTreeWidgetItem* keep = nodeItems_.value(selected);
@@ -2713,9 +2769,14 @@ void Host::pressKeys(const QJsonObject& m, QPointer<QLocalSocket> asker) {
 }
 
 // A toolbar icon: host/icons/tb-<name>.svg when there is one, else the desktop theme's, else Qt's.
-QIcon Host::setIcon(const QString& name) const {
+QString Host::setFile(const QString& name) const {
   for (const QString& f : {iconDir_.isEmpty() ? QString() : iconDir_ + "/" + name + ".svg", ":/sets/" + iconSet_ + "/" + name + ".svg", ":/sets/classic/" + name + ".svg"})
-    if (!f.isEmpty() && QFile::exists(f)) return QIcon(f);
+    if (!f.isEmpty() && QFile::exists(f)) return f;
+  return QString();
+}
+
+QIcon Host::setIcon(const QString& name) const {
+  if (const QString f = setFile(name); !f.isEmpty()) return QIcon(f);
   // an agent's icon the set lacks: where it runs, without the badge
   return name.endsWith("-claude") ? setIcon(name.chopped(7)) : QIcon();
 }
@@ -2724,6 +2785,43 @@ QIcon Host::setIcon(const QString& name) const {
 QIcon Host::kindIcon(const QString& kind) const {
   static const QHash<QString, QString> names{{"terminal", "console"}, {"container", "docker"}, {"terminal-claude", "console-claude"}, {"container-claude", "docker-claude"}, {"project", "project"}};
   return names.contains(kind) ? setIcon(names.value(kind)) : QIcon();
+}
+
+int Host::frameCount(const QString& base) const {
+  if (auto c = frameCounts_.constFind(base); c != frameCounts_.cend()) return *c;
+  int n = 0;
+  while (n < 99 && !setFile(QString("%1-working-%2").arg(base).arg(n + 1, 2, 10, QChar('0'))).isEmpty()) ++n;
+  frameCounts_.insert(base, n);
+  return n;
+}
+
+// A set with state pictures (<base>-working-NN, -asking, -done) shows them; the provider's
+// badge (badge-claude) goes over the corner of whatever is shown. A set without either draws
+// the entry as it always has.
+QIcon Host::stateIcon(const QString& kind, const QString& state, int frame, QString* key) const {
+  static const QHash<QString, QString> bases{{"terminal", "console"}, {"container", "docker"}, {"terminal-claude", "console"}, {"container-claude", "docker"}};
+  const QString base = bases.value(kind);
+  QString name;
+  if (!base.isEmpty()) {
+    if (state == "work") { if (const int n = frameCount(base)) name = QString("%1-working-%2").arg(base).arg(frame % n + 1, 2, 10, QChar('0')); }
+    else if (state == "ask") name = base + "-asking";
+    else if (state == "wait") name = base + "-done";
+    if (!name.isEmpty() && setFile(name).isEmpty()) name.clear();
+  }
+  const QString badge = kind.endsWith("-claude") ? setFile("badge-claude") : QString();
+  if (name.isEmpty() && (badge.isEmpty() || base.isEmpty())) {
+    if (key) *key = kind;
+    return kindIcon(kind);
+  }
+  if (name.isEmpty()) name = base;
+  if (key) *key = name;
+  const QString cacheKey = name + "|" + badge;
+  if (auto c = stateIcons_.constFind(cacheKey); c != stateIcons_.cend()) return *c;
+  QList<QPair<QString, QRectF>> layers{{setFile(name), QRectF(0, 0, 24, 24)}};
+  if (!badge.isEmpty()) layers.append({badge, QRectF(15, 15, 9, 9)}); // the kit's anchor: 9x9 at 15,15
+  const QIcon icon = layeredIcon(layers);
+  stateIcons_.insert(cacheKey, icon);
+  return icon;
 }
 
 QIcon Host::toolIcon(const QString& name) const {
@@ -2927,7 +3025,7 @@ void Host::showNodeMenu(const QString& node, const QPoint& globalPos, const QStr
     const QJsonObject a = v.toObject();
     if (a.value("separator").toBool()) { m.addSeparator(); continue; }
     const QString key = a.value("key").toString();
-    QAction* act = m.addAction(a.value("label").toString() + (key.isEmpty() ? QString() : "\t" + key));
+    QAction* act = m.addAction(a.value("label").toString() + (key.isEmpty() ? QString() : "\t" + listKey(key)));
     act->setEnabled(a.value("enabled").toBool(true));
     const QString id = a.value("id").toString();
     connect(act, &QAction::triggered, this, [this, id, node, termId] { emitEvent({{"ev", "action"}, {"action", id}, {"node", node}, {"id", termId}}); });
@@ -3020,24 +3118,28 @@ bool Host::eventFilter(QObject* o, QEvent* e) {
     if (it != terms_.end() && it->resizeTimer) { it->resizePending = true; it->resizeTimer->start(it->seeded ? 40 : 150); }
     return false;
   }
-  if (o == tree_ && e->type() == QEvent::KeyPress) {
+  // the list's own keys (Ctrl+<letter>) beat the window's shortcuts while it has the keyboard
+  if (o == tree_ && (e->type() == QEvent::KeyPress || e->type() == QEvent::ShortcutOverride)) {
     auto* k = static_cast<QKeyEvent*>(e);
-    if (k->key() == Qt::Key_Escape) { focusCurrent(); return true; }
+    const bool press = e->type() == QEvent::KeyPress;
     const QString node = currentNode();
-    if (k->key() == Qt::Key_Return || k->key() == Qt::Key_Enter) {
+    if (press && k->key() == Qt::Key_Escape) { focusCurrent(); return true; }
+    if (press && (k->key() == Qt::Key_Return || k->key() == Qt::Key_Enter)) {
       if (!node.isEmpty()) emitEvent({{"ev", "activate"}, {"node", node}});
       return true;
     }
-    const QString ch = k->text();
-    if (ch.size() == 1 && ch[0].isPrint() && !ch[0].isSpace() && !(k->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier))) {
-      for (const auto& v : nodeActions_.value(node)) {
-        const QJsonObject a = v.toObject();
-        if (a.value("key").toString() == ch && a.value("enabled").toBool(true)) {
-          emitEvent({{"ev", "action"}, {"action", a.value("id").toString()}, {"node", node}, {"id", QString()}});
-          return true;
-        }
-      }
-      if (sidebarKeys_.contains(ch)) { runAction(sidebarKeys_.value(ch)); return true; }
+    for (const auto& v : nodeActions_.value(node)) {
+      const QJsonObject a = v.toObject();
+      if (a.value("key").toString().isEmpty() || !a.value("enabled").toBool(true) || !isListKey(k, a.value("key").toString())) continue;
+      if (press) emitEvent({{"ev", "action"}, {"action", a.value("id").toString()}, {"node", node}, {"id", QString()}});
+      e->accept();
+      return true;
+    }
+    for (auto it = sidebarKeys_.cbegin(); it != sidebarKeys_.cend(); ++it) {
+      if (!isListKey(k, it.key())) continue;
+      if (press) runAction(it.value());
+      e->accept();
+      return true;
     }
   }
   return QMainWindow::eventFilter(o, e);
@@ -3310,10 +3412,10 @@ void Host::showKeyBar() {
     add("Esc", "back to the pane");
     for (const auto& v : nodeActions_.value(currentNode())) {
       const QJsonObject a = v.toObject();
-      if (!a.value("key").toString().isEmpty() && a.value("enabled").toBool(true)) add(a.value("key").toString(), a.value("label").toString());
+      if (!a.value("key").toString().isEmpty() && a.value("enabled").toBool(true)) add(listKey(a.value("key").toString()), a.value("label").toString());
     }
     for (auto it = sidebarKeys_.begin(); it != sidebarKeys_.end(); ++it)
-      for (QAction* act : actions_) if (act->data().toString() == it.value()) add(it.key(), act->text().remove('&').remove(QChar(0x2026)));
+      for (QAction* act : actions_) if (act->data().toString() == it.value()) add(listKey(it.key()), act->text().remove('&').remove(QChar(0x2026)));
   }
   for (QAction* act : actions_) {
     if (act->shortcuts().isEmpty()) continue;
