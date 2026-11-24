@@ -77,7 +77,7 @@ maximised, shownIn[], current, tabs[]}`.
 | `driver` | | This client is the driver: it gets what the user did while none was listening. |
 | `open` | `id`, `tab`, `title`, `color`, `node`, `attention`, `focus`, and `argv[]`+`cwd`+`env{}` or `tmux{session,pane,window}` | A terminal in `tab` (made on demand). An existing `id` is only focused. |
 | `close` | `id` | Remove the terminal (a native pane's program is not touched). An emptied tab closes. |
-| `focus` | `id` | Its tab, its group of panes, the keyboard. |
+| `focus` | `id`, `ifFocus` | Its tab, its group of panes, the keyboard. With `ifFocus`, only if the user has not moved since (see `focusSerial`). |
 | `set` | `id`, `title`, `color`, `attention`, `node` | Change what its header shows and which tree entry is its own. |
 | `order` | `tab`, `ids[]` | The order of a tab's panes. |
 | `plan` | `id`, `tab`, `path`, `agent`, `text` | A plan agent pane `id` asked the user to read: Markdown in a panel over `tab` only; again for the same `id`: reloaded, scroll kept. |
@@ -124,6 +124,11 @@ into a row of the open Settings' Shortcuts table, a row ticked, the dialog accep
 `stale {id}` (does the terminal draw what it holds?) and `alpha {id}`.
 
 ## Events (window → clients), `ev`
+
+Every event carries `focusSerial`: how many times the user has moved the keyboard or the tab in
+front (moves a client asked for do not count). A client that starts something on an event and
+finishes it later passes that number back as `ifFocus` on `focus`, `tab {focus}` or
+`open {focus}`; the window then takes the keyboard only if the number is unchanged.
 
 `hello {version}` · `opened {id, tab}` · `seeded {id, history, gap}` (a native pane's
 state is in) · `exited {id, reason}` (its program or pane ended; the terminal is

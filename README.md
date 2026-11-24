@@ -221,7 +221,9 @@ tests/gui-demo.sh          # try it in a sandbox: temp HOME, fake claude, privat
 ```
 
 - **Tabs are projects.** `Ctrl+Tab` goes to the next one. Each has a colour: a dot on
-  its tab, and a faint tint of it in the background of its terminals.
+  its tab, and a faint tint of it in the background of its terminals. Any colour: type
+  `#rrggbb`, or hold the mouse on one of the swatches in New project / Color… and move it
+  (left/right the hue, up/down lighter or darker, the wheel how vivid), live.
 - **Panes are its repos and agents**, plus the shells and the chat you open. At most
   four are on screen (`gui.panesPerGroup`); a project with more shows them in groups,
   listed under the grid. `Ctrl+Shift+Tab` walks through every pane, group after group.
@@ -258,6 +260,9 @@ tests/gui-demo.sh          # try it in a sandbox: temp HOME, fake claude, privat
   opens it over the agent's pane; select a passage, type a question, Enter, and the agent
   gets it in its prompt as `[review] <path>:<lines>` quoting the passage. The panel reloads
   when the agent edits the plan. `my-claude install --skills` links the skill in.
+- **It does not take the keyboard from you:** what you start and leave to finish (a new
+  project cloning, a Start, a new console or shell) comes to the front when ready only if
+  you have not moved since; otherwise its tab opens behind where you went.
 - **Back and forward, as in a browser:** every place the keyboard goes (a pane, a console,
   another project) is a point, with the view as you left it there (zoom, minimised panes,
   the consoles' panel); the mouse's back and forward buttons walk them, and the stack is

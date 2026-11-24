@@ -104,6 +104,11 @@ grep -q -- "--model opus-5.5" "$FAKE_CLAUDE_LOG" || fail "model not passed"
 
 mc lead smoke r2 "ship it" >/dev/null; [ "$(mc status smoke --json | jq -r '[.lead,.goal,.peers[0].role,.peers[1].role]|join(",")')" = "r2,ship it,peer,lead" ] || fail "lead+goal"
 mc set smoke r3 --model sonnet-5.5 >/dev/null; [ "$(mc status smoke --json | jq -r '.peers[2].model')" = sonnet-5.5 ] || fail "set model"
+# A project's colour: one of the names, or any #rrggbb
+mc color smoke "#336699" >/dev/null || fail "a #rrggbb colour should be taken"
+[ "$(jq -r .color "$MY_CLAUDE_ROOT/projects/smoke/project.json")" = "#336699" ] || fail "the colour should be recorded"
+mc color smoke "#33669" >/dev/null 2>&1 && fail "a malformed colour should be refused"
+mc color smoke blue >/dev/null || fail "a named colour still works"
 # An agent asks the window to show a plan: the request waits in the project's folder.
 mkdir -p "$tmp/r1/docs"; echo "# plan" > "$tmp/r1/docs/plan.md"
 (cd "$tmp/r1" && MY_CLAUDE_PROJECT=smoke MY_CLAUDE_PEER=r1 mc review docs/plan.md >/dev/null) || fail "review should take a plan"

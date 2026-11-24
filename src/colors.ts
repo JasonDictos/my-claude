@@ -12,11 +12,15 @@ export const PALETTE: Record<string, { ink: string; tmux: string }> = {
   pink: { ink: "#ff87d7", tmux: "colour212" },
 };
 export const COLOR_NAMES = Object.keys(PALETTE);
+// A project's colour: one of the names, or any #rrggbb (the window's picker gives those).
+export const isColor = (c: string) => !!PALETTE[c] || /^#[0-9a-fA-F]{6}$/.test(c);
+export const colorHelp = `a name (${COLOR_NAMES.join(", ")}) or #rrggbb`;
 // The handful offered when creating a project.
 export const COLOR_CHOICES = ["blue", "orange", "green", "purple", "red"];
 
 export function projectColor(name: string, chosen?: string | null): { ink: string; tmux: string } {
   if (chosen && PALETTE[chosen]) return PALETTE[chosen];
+  if (chosen && isColor(chosen)) return { ink: chosen.toLowerCase(), tmux: chosen.toLowerCase() }; // tmux takes #rrggbb too
   let h = 0;
   for (const c of name) h = (h * 31 + c.charCodeAt(0)) >>> 0;
   return PALETTE[COLOR_NAMES[h % COLOR_NAMES.length]];
