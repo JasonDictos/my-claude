@@ -97,6 +97,13 @@ grep -q -- "--model opus-5.5" "$FAKE_CLAUDE_LOG" || fail "model not passed"
 
 mc lead smoke r2 "ship it" >/dev/null; [ "$(mc status smoke --json | jq -r '[.lead,.goal,.peers[0].role,.peers[1].role]|join(",")')" = "r2,ship it,peer,lead" ] || fail "lead+goal"
 mc set smoke r3 --model sonnet-5.5 >/dev/null; [ "$(mc status smoke --json | jq -r '.peers[2].model')" = sonnet-5.5 ] || fail "set model"
+# An agent asks the window to show a plan: the request waits in the project's folder.
+mkdir -p "$tmp/r1/docs"; echo "# plan" > "$tmp/r1/docs/plan.md"
+(cd "$tmp/r1" && MY_CLAUDE_PROJECT=smoke MY_CLAUDE_PEER=r1 mc review docs/plan.md >/dev/null) || fail "review should take a plan"
+[ "$(cat "$MY_CLAUDE_ROOT/projects/smoke/.review/r1")" = "$tmp/r1/docs/plan.md" ] || fail "review should leave the plan's path for the window"
+(cd "$tmp/r1" && MY_CLAUDE_PROJECT=smoke MY_CLAUDE_PEER=r1 mc review docs/nope.md >/dev/null 2>&1) && fail "review of a missing file should fail"
+(cd "$tmp/r1" && unset MY_CLAUDE_PROJECT MY_CLAUDE_PEER && mc review docs/plan.md >/dev/null 2>&1) && fail "review outside an agent should fail"
+rm -rf "$MY_CLAUDE_ROOT/projects/smoke/.review"
 
 mc down smoke >/dev/null
 tmux has-session -t mc-smoke 2>/dev/null && fail "session should be gone"

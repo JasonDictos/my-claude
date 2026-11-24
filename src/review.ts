@@ -3,6 +3,34 @@
 // Plan review: an agent shows the user a plan over its pane; a passage the user selects and a
 // question come back to the agent as a "[review] <path>:<lines>" block in its prompt.
 
+import { mkdirSync, statSync, writeFileSync } from "node:fs";
+import { readFile, readdir, rm } from "node:fs/promises";
+import { join, resolve } from "node:path";
+import { PROJECTS, die } from "./store.ts";
+
+// A request waits in the project's folder for the driver: a file per agent holding the plan's
+// path. A file, not the window's socket: an agent in a container sees the one, not the other.
+const requests = (name: string) => join(PROJECTS, name, ".review");
+
+export function requestReview(name: string, repo: string, path: string): string {
+  const abs = resolve(path);
+  if (!statSync(abs, { throwIfNoEntry: false })?.isFile()) die(`no file ${abs}`);
+  mkdirSync(requests(name), { recursive: true });
+  writeFileSync(join(requests(name), repo), abs);
+  return abs;
+}
+
+// The requests waiting for a project, taken: each is answered once.
+export async function takeReviewRequests(name: string): Promise<{ repo: string; path: string }[]> {
+  const repos = await readdir(requests(name)).catch(() => [] as string[]);
+  return Promise.all(repos.map(async (repo) => {
+    const file = join(requests(name), repo);
+    const path = (await readFile(file, "utf8").catch(() => "")).trim();
+    await rm(file, { force: true });
+    return { repo, path };
+  })).then((all) => all.filter((r) => r.path));
+}
+
 // The window shows the plan rendered, so a selection has no Markdown in it: compare both
 // sides without it.
 const plain = (s: string) =>

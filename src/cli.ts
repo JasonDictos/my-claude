@@ -8,7 +8,8 @@ import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import * as core from "./core.ts";
 import * as tmux from "./tmux.ts";
 import { hostSend } from "./host.ts";
-import { ROOT, UsageError, load, type Role } from "./store.ts";
+import { ROOT, UsageError, die, load, type Role } from "./store.ts";
+import * as review from "./review.ts";
 
 const USAGE = `usage: my-claude [cui] [--remote user@host] <command> [args]   (no command: the menu)
   new    <project> [--goal TEXT] [--shared] [--profile P] [--color blue|orange|green|purple|red|yellow|teal|pink] [--ticket KEY]
@@ -26,6 +27,7 @@ const USAGE = `usage: my-claude [cui] [--remote user@host] <command> [args]   (n
   lead   <project> <repo> [GOAL TEXT]    set the lead (and the goal), brief everyone via claude-peers
   brief  <project>                       resend the briefs
   ticket <project> [KEY|-]               set (or clear) the tracker ticket the project is for; briefed to every peer
+  review <path>                          (inside an agent) show the user a plan over your pane, to ask about
   color  <project> <color>
   set    <project> <repo> [--role peer] [--model M|default] [--session <id or prefix>]
   index  <project> [<repo>]              rebuild the ctags symbol index (automatic at launch)
@@ -227,6 +229,14 @@ async function main(argv: string[]): Promise<number> {
     case "brief":
       if (rest.length !== 1) usage();
       return core.brief(await core.status(rest[0])).then((notes) => { for (const n of notes) console.log(n); return 0; });
+    case "review": {
+      // run by an agent (the review-plan skill): its project and name come with its environment
+      const name = process.env.MY_CLAUDE_PROJECT, repo = process.env.MY_CLAUDE_PEER;
+      if (rest.length !== 1) usage();
+      if (!name || !repo) die("review runs inside an agent (MY_CLAUDE_PROJECT and MY_CLAUDE_PEER unset)");
+      console.log(`${review.requestReview(name, repo, rest[0])}: opening over your pane in the window`);
+      return 0;
+    }
     case "set": {
       const { opts, pos } = parse(rest, ["--role", "--model", "--session"]);
       if (pos.length !== 2) usage();
