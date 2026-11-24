@@ -44,6 +44,7 @@ const USAGE = `usage: my-claude [cui] [--remote user@host] <command> [args]   (n
   gui    --connect <name>                this machine's window, with that saved machine's projects in it
   gui    --toggle | --build              show or hide the window (Ctrl+Alt+T) / rebuild it
   --install | --uninstall                the window in the desktop's application menu, with its show/hide key
+  install --skills                       my-claude's skills (review-plan) linked where Claude Code finds the user's
   deploy user@host[:port] [--identity F] [--jump H] [--no-service]   put my-claude on that machine (~/.local, no root)
   daemon                                 owns the projects' state, brings back what fell over, optional ssh endpoint
   service [install|uninstall|status]     the daemon as a systemd user service
@@ -140,6 +141,7 @@ async function main(argv: string[]): Promise<number> {
   const [cmd, ...rest] = argv;
   if (!cmd) return menuLoop();
   if (cmd === "--version" || cmd === "version") { console.log(`my-claude ${(await import("../package.json")).version}`); return 0; }
+  if (cmd === "install" && rest[0] === "--skills") { for (const l of core.installSkills()) console.log(l); return 0; }
   if (cmd === "--install" || cmd === "install") return (await import("./gui.ts")).install();
   if (cmd === "--uninstall" || cmd === "uninstall") return (await import("./gui.ts")).uninstall();
   switch (cmd) {

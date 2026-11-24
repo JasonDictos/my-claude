@@ -12,7 +12,7 @@ tmp=$(mktemp -d); trap 'tmux kill-server 2>/dev/null || true; rm -rf "$tmp"' EXI
 export TMUX_TMPDIR=$tmp; unset TMUX
 export MY_CLAUDE_ROOT=$tmp/root MY_CLAUDE_CLAUDE=$here/fake-claude FAKE_CLAUDE_LOG=$tmp/claude.log HOME=$tmp/home
 mkdir -p "$MY_CLAUDE_ROOT" "$HOME" "$tmp/r1" "$tmp/r2" "$tmp/r3" "$tmp/r4" "$tmp/r5" "$tmp/r6" "$tmp/r7"
-ln -s "$here/../src" "$MY_CLAUDE_ROOT/src"; ln -s "$here/../bin" "$MY_CLAUDE_ROOT/bin"; ln -s "$here/../node_modules" "$MY_CLAUDE_ROOT/node_modules"
+ln -s "$here/../src" "$MY_CLAUDE_ROOT/src"; ln -s "$here/../bin" "$MY_CLAUDE_ROOT/bin"; ln -s "$here/../node_modules" "$MY_CLAUDE_ROOT/node_modules"; ln -s "$here/../skills" "$MY_CLAUDE_ROOT/skills"
 echo '{"profile":"host","peers":{"cli":"/nonexistent/claude-peers-cli"}}' > "$MY_CLAUDE_ROOT/config.json"
 mc() { bun "$MY_CLAUDE_ROOT/src/cli.ts" "$@"; }
 fail() { echo "FAIL: $*" >&2; exit 1; }
@@ -67,6 +67,13 @@ wait_log 4
 [ "$(panel)" = "my-claude-panel 0 30" ] || fail "side panel missing or not a 30-col left column: $(panel)"
 grep -q -- "--session-id" "$FAKE_CLAUDE_LOG" || fail "first launch should use --session-id"
 grep -q -- "--name smoke/r1" "$FAKE_CLAUDE_LOG" || fail "peer name missing"
+grep -q 'review <path>' "$FAKE_CLAUDE_LOG" || fail "the brief should tell agents about plan review"
+# my-claude's skills, linked (not copied) where Claude looks for the user's
+env -u CLAUDE_CONFIG_DIR bun "$MY_CLAUDE_ROOT/src/cli.ts" install --skills >/dev/null || fail "install --skills"
+for s in review-plan plan-review; do
+  [ -L "$HOME/.claude/skills/$s" ] && [ "$(readlink "$HOME/.claude/skills/$s")" = "$MY_CLAUDE_ROOT/skills/$s" ] || fail "install --skills should link $s"
+done
+env -u CLAUDE_CONFIG_DIR bun "$MY_CLAUDE_ROOT/src/cli.ts" install --skills >/dev/null || fail "install --skills twice"
 st=$(mc ls --json | jq -r '.[0].state'); [[ $st = UP || $st = PARTIAL ]] || fail "ls state after up: '$st'"
 mc ls | grep -q '^smoke ' || fail "ls table"
 mc status smoke | grep -q '^r1 ' || fail "status table"
