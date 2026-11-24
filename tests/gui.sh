@@ -15,7 +15,10 @@ export TMUX_TMPDIR=$tmp; unset TMUX TMUX_PANE
 export MY_CLAUDE_ROOT=$tmp/root MY_CLAUDE_CLAUDE=$here/fake-claude FAKE_CLAUDE_LOG=$tmp/claude.log HOME=$tmp/home
 export MY_CLAUDE_NO_SHELL_ENV=1 MC_TERM_NO_STATE=1 MC_TERM_TEST=1 QT_QPA_PLATFORM=offscreen
 export MC_TERM_TEST_DESKTOP_KEYS="Alt+F1=Plasma › Activate Application Launcher"
-mkdir -p "$MY_CLAUDE_ROOT" "$HOME" "$tmp/r1" "$tmp/r2" "$tmp/r3" "$tmp/r4" "$tmp/r5" "$tmp/r6"
+mkdir -p "$MY_CLAUDE_ROOT" "$HOME" "$tmp/r1" "$tmp/r2" "$tmp/r3" "$tmp/r4" "$tmp/r5" "$tmp/r6" "$tmp/bin"
+# git as usual, but a clone waits while $tmp/hold-clones exists: the test looks at the window mid-clone
+printf '#!/bin/sh\nif [ "$1" = clone ]; then i=0; while [ -e %s ] && [ $i -lt 300 ]; do sleep 0.1; i=$((i+1)); done; fi\nexec %s "$@"\n' "$tmp/hold-clones" "$(command -v git)" > "$tmp/bin/git"
+chmod +x "$tmp/bin/git"; export PATH="$tmp/bin:$PATH"
 ln -s "$here/../src" "$MY_CLAUDE_ROOT/src"; ln -s "$here/../bin" "$MY_CLAUDE_ROOT/bin"; ln -s "$here/../node_modules" "$MY_CLAUDE_ROOT/node_modules"
 export E2E_PANES=${E2E_PANES:-native}
 echo "{\"profile\":\"host\",\"peers\":{\"cli\":\"/nonexistent/claude-peers-cli\"},\"gui\":{\"panes\":\"$E2E_PANES\"}}" > "$MY_CLAUDE_ROOT/config.json"

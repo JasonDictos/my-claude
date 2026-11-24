@@ -466,8 +466,11 @@ async function floatingPanes(): Promise<boolean> {
 // Every pane of the project, floats included: peers titled by repo, shells and the chat by
 // their `role` tag.
 export interface PaneRow { id: string; title: string; role: string; name: string; window: string; windowIndex: number; winActive: boolean; active: boolean; last: boolean; start: number; floating: boolean; width: number; height: number }
-// The panes whose Claude is busy now: Claude Code ends its screen with "… esc to interrupt"
-// while it works. Only the last lines count; the words may sit anywhere in what it wrote.
+// The panes whose Claude is busy now. While it works Claude Code shows a spinner line above its
+// input box ("* Unraveling… (1m 9s · …)") and usually ends its footer with "esc to interrupt"
+// (a crowded footer drops that). Only the bottom of the screen counts: the same words may sit
+// anywhere in what it wrote.
+const SPINNER = /…\s*\((?:\d+h\s+)?(?:\d+m\s+)?\d+s\b/;
 export async function busy(ids: string[]): Promise<Set<string>> {
   if (!ids.length) return new Set();
   const END = "\u001fmc-end ";
@@ -476,7 +479,8 @@ export async function busy(ids: string[]): Promise<Set<string>> {
   let lines: string[] = [];
   for (const line of out.split("\n")) {
     if (line.startsWith(END)) {
-      if (lines.filter((l) => l.trim()).slice(-3).some((l) => /esc to interrupt/i.test(l))) found.add(line.slice(END.length));
+      const shown = lines.filter((l) => l.trim());
+      if (shown.slice(-3).some((l) => /esc to interrupt/i.test(l)) || shown.slice(-10).some((l) => SPINNER.test(l))) found.add(line.slice(END.length));
       lines = [];
     } else lines.push(line);
   }

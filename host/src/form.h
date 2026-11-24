@@ -72,7 +72,7 @@ protected:
   void accept() override;
 
 private:
-  struct Field { QString key, group, type; bool required = false; QWidget* widget = nullptr; };
+  struct Field { QString key, group, type; bool required = false; QWidget* widget = nullptr; QWidget* focus = nullptr; }; // focus: where the keyboard starts, when not widget
   void addFields(QFormLayout* form, const QJsonObject& schema, const QJsonObject& values, const QString& group);
   QJsonValue read(const Field& f) const;
   static void setupTable(class QTreeWidget* tw, const QJsonObject& p);

@@ -4,6 +4,8 @@ import { appendFileSync } from "node:fs";
 const log = process.env.FAKE_PEERS_LOG!;
 const args = process.argv.slice(2);
 appendFileSync(log, args.join(" ") + "\n");
+// who each call signs as (CLAUDE_PEERS_FROM), beside it
+appendFileSync(`${log}.from`, `${args[0]} ${process.env.CLAUDE_PEERS_FROM ?? "-"}\n`);
 if (args[0] === "chat") {
   const text = await new Response(Bun.stdin.stream()).text();
   for (const line of text.split("\n").filter(Boolean)) appendFileSync(log, `send ${args[1]} ${line}\n`);

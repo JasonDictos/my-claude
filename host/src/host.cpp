@@ -197,7 +197,7 @@ static bool isListKey(const QKeyEvent* e, const QString& k) {
   return QKeySequence(listKey(k))[0].toCombined() == (mods | e->key());
 }
 
-const int kHostRole = Qt::UserRole + 2, kSectionRole = Qt::UserRole + 3, kKindRole = Qt::UserRole + 4, kNameRole = Qt::UserRole + 5, kStateRole = Qt::UserRole + 6, kIconKeyRole = Qt::UserRole + 7;
+const int kHostRole = Qt::UserRole + 2, kSectionRole = Qt::UserRole + 3, kKindRole = Qt::UserRole + 4, kNameRole = Qt::UserRole + 5, kStateRole = Qt::UserRole + 6, kIconKeyRole = Qt::UserRole + 7, kDimRole = Qt::UserRole + 8, kNameMaxRole = Qt::UserRole + 9;
 
 // Another machine's section row, like the caption: "PROJECTS @ " small and grey, the host bold white.
 class SectionDelegate : public QStyledItemDelegate {
@@ -205,9 +205,9 @@ public:
   using QStyledItemDelegate::QStyledItemDelegate;
   // F2: the entry's name edited in place; the new one (empty: its default) goes to its driver
   std::function<void(const QString& node, const QString& name)> renamed;
-  QWidget* createEditor(QWidget* parent, const QStyleOptionViewItem&, const QModelIndex&) const override {
+  QWidget* createEditor(QWidget* parent, const QStyleOptionViewItem&, const QModelIndex& idx) const override {
     auto* e = new QLineEdit(parent);
-    e->setMaxLength(64);
+    e->setMaxLength(idx.data(kNameMaxRole).toInt() > 0 ? idx.data(kNameMaxRole).toInt() : 64); // the box stops where the name must
     return e;
   }
   void setEditorData(QWidget* editor, const QModelIndex& idx) const override {
@@ -350,7 +350,15 @@ QJsonArray tagTree(const QJsonArray& nodes, const QString& tag, bool top) {
 }
 } // namespace
 
-void TermHook::onUrl(const QUrl& url, bool) { QDesktopServices::openUrl(url); }
+void TermHook::onUrl(const QUrl& u, bool) { if (url) url(u); }
+
+// A terminal link. Never an "email address": that pattern catches package@version far more
+// often than mail, and hands it to whatever the desktop opens mailto: with.
+void Host::openLink(const QUrl& url) {
+  if (url.scheme() == "mailto") return;
+  if (qEnvironmentVariableIsSet("MC_TERM_TEST")) lastOpened_ = url.toString();
+  else QDesktopServices::openUrl(url);
+}
 
 void Header::mousePressEvent(QMouseEvent* e) {
   if (e->button() == Qt::LeftButton) emit pressed();
@@ -388,6 +396,16 @@ Host::Host(const QString& socketPath, const QString& driverCmd, QWidget* parent)
   center_->addWidget(tabs_);
   setCentralWidget(center_);
   connect(qApp, &QApplication::focusChanged, this, [this] { updateToolbar(); noteSeen(); });
+  // An unpinned console panel goes when the keyboard leaves it for elsewhere in this window (a
+  // dialog or another application is not elsewhere, nor a console in it closing).
+  connect(qApp, &QApplication::focusChanged, this, [this](QWidget* old, QWidget* now) {
+    if (!old || !now || now->window() != this) return;
+    for (const ConsoleDock& d : std::as_const(docks_)) {
+      if (d.pinned || !d.frame->isAncestorOf(old) || d.frame->isAncestorOf(now)) continue;
+      if (d.frame->isVisible() && !old->isVisible()) continue;
+      QTimer::singleShot(0, this, [this, tab = d.tab] { dropDock(tab); });
+    }
+  });
   connect(tabs_, &QTabWidget::currentChanged, this, [this](int i) {
     QTimer::singleShot(0, this, [this] { updateToolbar(); });
     layoutDocks(); // (and the tab in front is kept)
@@ -427,6 +445,8 @@ Host::Host(const QString& socketPath, const QString& driverCmd, QWidget* parent)
     del->renamed = [this](const QString& node, const QString& name) { emitEvent({{"ev", "rename"}, {"node", node}, {"name", name}}); };
     tree_->setItemDelegateForColumn(0, del);
     tree_->setEditTriggers(QAbstractItemView::EditKeyPressed); // F2; a double-click opens
+    // the list held still while a name was typed in it: now what changed meanwhile
+    connect(del, &QAbstractItemDelegate::closeEditor, this, [this] { QTimer::singleShot(0, this, [this] { if (treeHeld_) rebuildTree(); }); });
   }
   // resting the mouse on a repo or shell shows its terminal, live, beside the list
   tree_->setMouseTracking(true);
@@ -824,13 +844,7 @@ void Host::handle(const QJsonObject& m, QLocalSocket* from) {
     if (!qEnvironmentVariableIsSet("MC_TERM_TEST")) registerGlobalKey();
     return;
   }
-  if (op == "toggle") {
-    // drop-down style: up front and full screen, or out of the way
-    if (!asks_.isEmpty() && isVisible()) { reattachDialogs(); return; } // a question is open: it comes forward
-    if (!m.value("show").toBool() && isVisible() && isActiveWindow() && !(windowState() & Qt::WindowMinimized)) { hide(); return; }
-    showInFront();
-    return;
-  }
+  if (op == "toggle") { toggleShown(m.value("show").toBool()); return; }
   if (op == "raise") { showAsSet(); setWindowState(windowState() & ~Qt::WindowMinimized); raise(); activateWindow(); return; }
   if (op == "quit") { close(); qApp->quit(); return; } // quit even when hidden (closing a hidden window ends nothing)
   if (op == "run") { runAction(m.value("action").toString()); return; } // as its menu item would
@@ -1090,6 +1104,17 @@ void Host::handle(const QJsonObject& m, QLocalSocket* from) {
     QTimer::singleShot(0, this, [this, asker, m] { pressKeys(m, asker); });
     return;
   }
+  if (op == "hover" && qEnvironmentVariableIsSet("MC_TERM_TEST")) { showPreview(nodeItems_.value(m.value("node").toString())); return; } // tests: the mouse rests on an entry
+  if (op == "link" && qEnvironmentVariableIsSet("MC_TERM_TEST")) { openLink(QUrl(m.value("url").toString())); return; } // tests: a terminal link clicked
+  if (op == "type" && qEnvironmentVariableIsSet("MC_TERM_TEST")) { // tests: typed into an open question's field with the keyboard
+    QPointer<FormDialog> d = asks_.value(m.value("dialog").toString());
+    QWidget* w = d ? d->focusWidget() : nullptr;
+    if (!w) { reply(from, {{"ev", "error"}, {"error", "no question field to type into"}}); return; }
+    QTest::keyClicks(w, m.value("text").toString());
+    if (m.value("enter").toBool()) QTest::keyClick(w, Qt::Key_Return);
+    reply(from, {{"ev", "typed"}, {"values", d ? d->values() : QJsonObject()}});
+    return;
+  }
   if (op == "keytable" && qEnvironmentVariableIsSet("MC_TERM_TEST")) {
     // tests: a key pressed into a row of an open dialog's Shortcuts table, or a row ticked
     FormDialog* d = asks_.value(m.value("dialog").toString("settings"));
@@ -1147,25 +1172,28 @@ void Host::handle(const QJsonObject& m, QLocalSocket* from) {
       shownIn.sort();
       for (const QString& tid : d.order) {
         const Term& x = terms_[tid];
-        const bool front = d.frame->isVisible() && !d.minimised && d.tabs->currentWidget() == x.box;
+        const bool front = d.frame->isVisible() && d.tabs->currentWidget() == x.box;
         terms.append(QJsonObject{{"id", mine(x.id)}, {"tab", mine(x.tab)}, {"title", x.title}, {"attention", x.attention}, {"node", x.node},
-                                 {"minimised", d.minimised}, {"zoomed", d.maximised}, {"active", activeId_ == x.id}, {"onScreen", front}, {"scheme", x.ownScheme}, {"native", x.native}, {"live", x.live},
+                                 {"minimised", false}, {"zoomed", d.maximised}, {"active", activeId_ == x.id}, {"onScreen", front}, {"scheme", x.ownScheme}, {"native", x.native}, {"live", x.live},
                                  {"held", x.off}, {"cols", x.widget->screenColumnsCount()}, {"rows", x.widget->screenLinesCount()}, {"history", x.widget->historyLinesCount()}, {"pending", x.feed ? double(x.feed->pending()) : 0.0}});
       }
-      docks.append(QJsonObject{{"tab", mine(d.tab)}, {"count", int(d.order.size())}, {"visible", d.frame->isVisible()}, {"pinned", d.pinned}, {"minimised", d.minimised}, {"maximised", d.maximised},
+      docks.append(QJsonObject{{"tab", mine(d.tab)}, {"count", int(d.order.size())}, {"visible", d.frame->isVisible()}, {"pinned", d.pinned}, {"maximised", d.maximised},
                                {"shownIn", QJsonArray::fromStringList(shownIn)}, {"current", d.tabs->currentIndex() >= 0 ? d.tabs->tabText(d.tabs->currentIndex()) : QString()},
                                {"tabs", [&] { QJsonArray a; for (int i = 0; i < d.tabs->count(); ++i) a << d.tabs->tabText(i); return a; }()}});
     }
     for (auto it = nodeItems_.begin(); it != nodeItems_.end(); ++it) nodes.append(QJsonObject{{"id", it.key()}, {"label", it.value()->text(0)}, {"badge", it.value()->text(1)}, {"state", it.value()->data(0, kStateRole).toString()},
-                                                                                                 {"icon", it.value()->data(0, kIconKeyRole).toString()}, {"bold", it.value()->font(0).bold()}});
+                                                                                                 {"icon", it.value()->data(0, kIconKeyRole).toString()}, {"bold", it.value()->font(0).bold()},
+                                                                                                 {"dim", it.value()->data(0, kDimRole).toBool()}});
     for (auto it = asks_.begin(); it != asks_.end(); ++it) asks.append(it.key());
     QJsonArray tools;
     if (toolbar_) for (QAction* a : toolbar_->actions()) if (!a->data().toString().isEmpty()) tools.append(QJsonObject{{"id", a->data().toString()}, {"enabled", a->isEnabled()}});
     for (QAction* a : actions_) acts.append(a->data().toString());
     const Tab* cur = currentTab();
     reply(from, {{"ev", "list"}, {"terminals", terms}, {"tabs", tabNames}, {"current", cur ? cur->name : QString()}, {"consoles", docks}, {"nodes", nodes}, {"toolbar", tools}, {"overview", overview_ != nullptr},
-                 {"asks", asks}, {"actions", acts}, {"selected", currentNode()}, {"sidebar", dock_->isVisible()}, {"driver", driver_ != nullptr},
-                 {"shown", isVisible() && !(windowState() & Qt::WindowMinimized)}, {"fullScreen", isFullScreen()}, {"keyBar", keyBar_ && keyBar_->isVisible()}, {"menuBar", menuBar()->isVisible()}, {"badges", int(badges_.size())}, {"keyBarText", keyBar_ ? keyBar_->text() : QString()}, {"activeWindow", isActiveWindow()}, {"opened", lastOpened_}});
+                 {"asks", asks}, {"preview", preview_ && preview_->isVisible() ? previewId_ : QString()}, {"actions", acts}, {"selected", currentNode()}, {"sidebar", dock_->isVisible()}, {"driver", driver_ != nullptr},
+                 {"shown", isVisible() && !(windowState() & Qt::WindowMinimized)}, {"fullScreen", isFullScreen()}, {"keyBar", keyBar_ && keyBar_->isVisible()}, {"menuBar", menuBar()->isVisible()}, {"badges", int(badges_.size())}, {"keyBarText", keyBar_ ? keyBar_->text() : QString()}, {"activeWindow", isActiveWindow()}, {"opened", lastOpened_},
+                 // where an open dialog puts the keyboard once it has it
+                 {"dialogsShown", [] { int n = 0; for (QWidget* w : QApplication::topLevelWidgets()) n += qobject_cast<QDialog*>(w) && w->isVisible(); return n; }()}, {"askFocus", [&] { for (FormDialog* d : asks_) if (d && d->focusWidget()) return QString(d->focusWidget()->metaObject()->className()); return QString(); }()}});
     return;
   }
   reply(from, {{"ev", "error"}, {"error", "unknown op " + op}});
@@ -1359,6 +1387,7 @@ void Host::open(const QJsonObject& m) {
   hook->bell = [this, id] { emitEvent({{"ev", "bell"}, {"id", id}}); };
   hook->title = [this, id, w] { emitEvent({{"ev", "title"}, {"id", id}, {"title", w->title()}}); };
   hook->selected = [this, w](bool yes) { if (yes && copyOnSelect_) w->copyClipboard(); };
+  hook->url = [this](const QUrl& u) { openLink(u); };
   bool ok = connect(w, SIGNAL(finished()), hook, SLOT(onFinished()))
     && connect(w, SIGNAL(termGetFocus()), hook, SLOT(onFocused()))
     && connect(w, SIGNAL(bell(QString)), hook, SLOT(onBell(QString)))
@@ -2180,7 +2209,6 @@ void Host::focusTerm(const QString& id) {
   if (isConsoleTab(terms_[id].tab)) { // up over the view in front, on its tab, with the keyboard
     ConsoleDock& d = dockFor(terms_[id].tab);
     d.tabs->setCurrentWidget(terms_[id].box);
-    d.minimised = false;
     showDock(d.tab, true);
     return;
   }
@@ -2233,7 +2261,7 @@ QString Host::currentTermId() {
   const QString f = termHolding(QApplication::focusWidget());
   if (!f.isEmpty() && isConsoleTab(terms_.value(f).tab)) return f;
   if (f.isEmpty() && terms_.contains(activeId_) && isConsoleTab(terms_[activeId_].tab))
-    if (auto d = docks_.constFind(terms_[activeId_].tab); d != docks_.constEnd() && !d->frame->isHidden() && !d->minimised) return activeId_;
+    if (auto d = docks_.constFind(terms_[activeId_].tab); d != docks_.constEnd() && !d->frame->isHidden()) return activeId_;
   Tab* tab = currentTab();
   if (!tab) return QString();
   const QStringList vis = visible(*tab);
@@ -2255,7 +2283,6 @@ void Host::toggleZoom(const QString& id) {
   if (isConsoleTab(terms_[id].tab)) { // the panel, over the whole tab and back
     ConsoleDock& d = dockFor(terms_[id].tab);
     d.maximised = !d.maximised;
-    d.minimised = false;
     showDock(d.tab, true);
     return;
   }
@@ -2268,12 +2295,8 @@ void Host::toggleZoom(const QString& id) {
 }
 
 void Host::setMinimised(const QString& id, bool on) {
-  if (terms_.contains(id) && isConsoleTab(terms_[id].tab)) { // the panel, down to its title strip
-    ConsoleDock& d = dockFor(terms_[id].tab);
-    if (on == d.minimised) return;
-    d.minimised = on;
-    if (on) d.maximised = false;
-    if (on) { layoutDocks(); focusCurrent(); } else showDock(d.tab, true);
+  if (terms_.contains(id) && isConsoleTab(terms_[id].tab)) { // the panel put away, or back
+    if (on) hideDock(terms_[id].tab); else showDock(terms_[id].tab, true);
     return;
   }
   if (!terms_.contains(id) || terms_[id].minimised == on) return;
@@ -2388,7 +2411,7 @@ void Host::saveSession() {
     QStringList in(d.shownIn.begin(), d.shownIn.end());
     QWidget* w = d.tabs->currentWidget();
     const QString cur = termHolding(w ? w->findChild<QTermWidget*>() : nullptr);
-    cons[d.tab] = QJsonObject{{"shownIn", QJsonArray::fromStringList(in)}, {"minimised", d.minimised}, {"maximised", d.maximised},
+    cons[d.tab] = QJsonObject{{"shownIn", QJsonArray::fromStringList(in)}, {"maximised", d.maximised},
                               {"current", terms_.contains(cur) ? sessionKey(terms_[cur]) : QString()}};
   }
   out["consoles"] = cons;
@@ -2440,19 +2463,10 @@ ConsoleDock& Host::dockFor(const QString& tab) {
   d.pin->setCheckable(true);
   connect(d.pin, &QToolButton::toggled, this, [this, tab](bool on) { if (docks_.contains(tab) && docks_[tab].pinned != on) pinDock(tab, on); });
   row->addWidget(d.pin);
-  QToolButton* minB = glyphButton(d.bar, GMin, "Minimise to the title strip");
-  connect(minB, &QToolButton::clicked, this, [this, tab] {
-    ConsoleDock& x = docks_[tab];
-    x.minimised = !x.minimised;
-    if (x.minimised) x.maximised = false;
-    if (x.minimised) { layoutDocks(); focusCurrent(); } else showDock(tab, true);
-  });
-  row->addWidget(minB);
   QToolButton* maxB = glyphButton(d.bar, GMax, "Maximise / restore (or double-click the title)");
   connect(maxB, &QToolButton::clicked, this, [this, tab] {
     ConsoleDock& x = docks_[tab];
     x.maximised = !x.maximised;
-    x.minimised = false;
     showDock(tab, true);
   });
   row->addWidget(maxB);
@@ -2478,7 +2492,7 @@ ConsoleDock& Host::dockFor(const QString& tab) {
     // a click on a console's tab: that console, with the keyboard
     const ConsoleDock& x = docks_[tab];
     QWidget* w = x.tabs->widget(i);
-    if (!w || !x.frame->isVisible() || x.minimised) return;
+    if (!w || !x.frame->isVisible()) return;
     const QString id = termHolding(w->findChild<QTermWidget*>());
     if (!terms_.contains(id)) return;
     if (QApplication::focusWidget() && x.frame->isAncestorOf(QApplication::focusWidget())) terms_[id].widget->setFocus();
@@ -2502,15 +2516,14 @@ ConsoleDock& Host::dockFor(const QString& tab) {
   }
   const QJsonObject was = session_.value("consoles").toObject().value(tab).toObject();
   for (const auto& v : was.value("shownIn").toArray()) d.shownIn.insert(v.toString());
-  d.minimised = was.value("minimised").toBool();
   d.maximised = was.value("maximised").toBool();
   d.pin->setChecked(d.pinned);
   docks_.insert(tab, d);
   return docks_[tab];
 }
 
-// Each panel up (over the tabs it was opened on, or every one when pinned), minimised to its
-// title strip, maximised over the whole view, or not shown; never off the view.
+// Each panel up (over the tabs it was opened on, or every one when pinned), maximised over the
+// whole view, or not shown; never off the view.
 void Host::layoutDocks() {
   scheduleSave();
   const QString view = currentView();
@@ -2530,9 +2543,7 @@ void Host::layoutDocks() {
     r.moveLeft(qBound(0, r.left(), qMax(0, area.width() - 80)));
     r.moveTop(qBound(0, r.top(), qMax(0, area.height() - d.bar->height())));
     if (d.maximised) r = area;
-    else if (d.minimised) r.setHeight(d.bar->height() + 2);
-    d.tabs->setVisible(!d.minimised);
-    d.grip->setVisible(!d.minimised && !d.maximised);
+    d.grip->setVisible(!d.maximised);
     d.frame->setGeometry(r);
     d.grip->move(r.width() - d.grip->width() - 1, r.height() - d.grip->height() - 1);
     d.frame->show();
@@ -2547,7 +2558,7 @@ void Host::showDock(const QString& tab, bool focus) {
   ConsoleDock& d = dockFor(tab);
   d.shownIn.insert(currentView());
   layoutDocks();
-  if (d.frame->isHidden() || !focus || d.minimised) return; // (not isVisible: false until the window itself is shown)
+  if (d.frame->isHidden() || !focus) return; // (not isVisible: false until the window itself is shown)
   QWidget* w = d.tabs->currentWidget();
   const QString id = termHolding(w ? w->findChild<QTermWidget*>() : nullptr);
   if (terms_.contains(id)) { terms_[id].widget->setFocus(); setActive(id); }
@@ -2559,6 +2570,15 @@ void Host::hideDock(const QString& tab) {
   if (it == docks_.end()) return;
   if (it->pinned) { it->pinned = false; it->pin->setChecked(false); it->shownIn.clear(); saveDock(*it); }
   else it->shownIn.remove(currentView());
+  layoutDocks();
+}
+
+// Off every view, unless pinned or the keyboard came back to it meanwhile.
+void Host::dropDock(const QString& tab) {
+  auto it = docks_.find(tab);
+  if (it == docks_.end() || it->pinned) return;
+  if (QWidget* f = QApplication::focusWidget(); f && it->frame->isAncestorOf(f)) return;
+  it->shownIn.clear();
   layoutDocks();
 }
 
@@ -2586,18 +2606,15 @@ void Host::consoleAction(const QString& a) {
   const bool any = it != docks_.end() && !it->order.isEmpty();
   if (a == "host.consoles") { // show/hide; with none yet, the machine's driver opens the first
     if (!any) { emitEvent({{"ev", "action"}, {"action", "console.new"}, {"tab", tab}, {"focus", "term"}}); return; }
-    const bool up = it->frame->isVisible() && !it->minimised;
-    if (up) hideDock(tab);
-    else { it->minimised = false; showDock(tab, true); }
+    if (it->frame->isVisible()) hideDock(tab);
+    else showDock(tab, true);
     return;
   }
   if (!any) return;
   if (a == "host.console-next" || a == "host.console-prev") {
     const int n = it->tabs->count();
-    const bool up = it->frame->isVisible() && !it->minimised;
     // first press on a panel not up: it comes up as it was
-    if (up) it->tabs->setCurrentIndex(((it->tabs->currentIndex() + (a == "host.console-next" ? 1 : -1)) % n + n) % n);
-    it->minimised = false;
+    if (it->frame->isVisible()) it->tabs->setCurrentIndex(((it->tabs->currentIndex() + (a == "host.console-next" ? 1 : -1)) % n + n) % n);
     showDock(tab, true);
   } else if (a == "host.console-pin") pinDock(tab, !it->pinned);
   else if (a == "host.console-rename") {
@@ -2612,21 +2629,27 @@ void Host::renameConsole(const QString& id) {
   auto* d = new QInputDialog(this);
   d->setWindowTitle("Rename console");
   d->setLabelText("New name (letters, digits, . _ -; no other console's):");
+  d->setInputMode(QInputDialog::TextInput);
+  // as long as its entry in the list allows: the box stops there
+  const QTreeWidgetItem* entry = nodeItems_.value(terms_[id].node);
+  const int max = entry ? entry->data(0, kNameMaxRole).toInt() : 0;
+  if (auto* e = d->findChild<QLineEdit*>()) e->setMaxLength(max > 0 ? max : 64);
   d->setTextValue(terms_[id].title);
   d->setAttribute(Qt::WA_DeleteOnClose);
   connect(d, &QInputDialog::textValueSelected, this, [this, id](const QString& name) {
     if (name.trimmed() != terms_.value(id).title) emitEvent({{"ev", "rename"}, {"id", id}, {"name", name.trimmed()}});
   });
   d->open();
+  d->activateWindow();
 }
 
-// The panels' title strips (drag to move, double-click to maximise, a click on a minimised one
-// restores it) and their size grips; the view's own resizes keep them on it.
+// The panels' title strips (drag to move, double-click to maximise) and their size grips; the
+// view's own resizes keep them on it.
 bool Host::dockEvent(QObject* o, QEvent* e) {
   if (o == center_ && e->type() == QEvent::Resize) { layoutDocks(); return false; }
   if (e->type() == QEvent::Resize && o->property("dockFrame").isValid()) {
     auto it = docks_.find(o->property("dockFrame").toString());
-    if (it != docks_.end() && it->frame->isVisible() && !it->maximised && !it->minimised && it->frame->geometry() != it->normal) {
+    if (it != docks_.end() && it->frame->isVisible() && !it->maximised && it->frame->geometry() != it->normal) {
       it->normal = it->frame->geometry();
       it->grip->move(it->normal.width() - it->grip->width() - 1, it->normal.height() - it->grip->height() - 1);
       saveDock(*it);
@@ -2641,7 +2664,7 @@ bool Host::dockEvent(QObject* o, QEvent* e) {
   if (it == docks_.end()) return false;
   auto* me = static_cast<QMouseEvent*>(e);
   const QPoint at = me->globalPosition().toPoint();
-  if (t == QEvent::MouseButtonDblClick) { it->maximised = !it->maximised; it->minimised = false; showDock(it->tab, true); return true; }
+  if (t == QEvent::MouseButtonDblClick) { it->maximised = !it->maximised; showDock(it->tab, true); return true; }
   if (t == QEvent::MouseButtonPress && me->button() == Qt::LeftButton) {
     dockGrab_ = at - it->frame->pos();
     dockDragging_ = it->tab;
@@ -2663,7 +2686,6 @@ bool Host::dockEvent(QObject* o, QEvent* e) {
   if (t == QEvent::MouseButtonRelease && dockDragging_ == it->tab) {
     dockDragging_.clear();
     if (dockMoved_) saveDock(*it);
-    else if (it->minimised) { it->minimised = false; showDock(it->tab, true); }
     return true;
   }
   return false;
@@ -2699,7 +2721,7 @@ void Host::setTree(const QJsonArray& nodes) {
     it->setText(0, n.value("label").toString());
     if (n.contains("section")) { it->setData(0, kSectionRole, true); it->setData(0, kHostRole, n.value("section").toString()); }
     if (id.startsWith("p:")) { QFont f = it->font(0); f.setBold(true); it->setFont(0, f); } // a project: bold in its colour
-    if (n.contains("name")) { it->setFlags(it->flags() | Qt::ItemIsEditable); it->setData(0, kNameRole, n.value("name").toString()); }
+    if (n.contains("name")) { it->setFlags(it->flags() | Qt::ItemIsEditable); it->setData(0, kNameRole, n.value("name").toString()); it->setData(0, kNameMaxRole, n.value("nameMax").toInt()); }
     if (n.contains("can")) { QSet<QString> can; for (const auto& c : n.value("can").toArray()) can << c.toString(); nodeCan_.insert(id, can); }
     if (n.contains("icon")) {
       const QString kind = n.value("icon").toString(), state = n.value("state").toString();
@@ -2716,6 +2738,7 @@ void Host::setTree(const QJsonArray& nodes) {
     if (n.contains("badgeColor")) it->setForeground(1, QColor(n.value("badgeColor").toString()));
     if (n.value("bold").toBool()) { QFont f = it->font(0); f.setBold(true); it->setFont(0, f); }
     if (n.value("dim").toBool()) it->setForeground(0, palette().color(QPalette::Disabled, QPalette::Text));
+    it->setData(0, kDimRole, n.value("dim").toBool());
     nodeActions_.insert(id, n.value("actions").toArray());
     nodeItems_.insert(id, it);
     for (const auto& c : n.value("children").toArray()) add(it, c.toObject());
@@ -2753,7 +2776,9 @@ void Host::pictureOf(const QString& id, std::function<void(QPixmap)> done) {
 
 // A test's key press (the `key` request); `asker` may be gone by the time there is an answer.
 void Host::pressKeys(const QJsonObject& m, QPointer<QLocalSocket> asker) {
-  activateWindow();
+  // to the dialog in front when one is, as the keyboard does; else this window
+  QWidget* to = QApplication::activeModalWidget() ? QApplication::activeModalWidget() : static_cast<QWidget*>(this);
+  to->activateWindow();
   if (m.contains("hold")) { // held down that long, then let go (the reply comes after)
     const QKeyCombination kc = QKeySequence(m.value("keys").toString())[0];
     QPointer<QWidget> target = QApplication::focusWidget() ? QApplication::focusWidget() : static_cast<QWidget*>(this);
@@ -2764,7 +2789,7 @@ void Host::pressKeys(const QJsonObject& m, QPointer<QLocalSocket> asker) {
     });
     return;
   }
-  QTest::keySequence(windowHandle(), QKeySequence(m.value("keys").toString()));
+  QTest::keySequence(to->windowHandle(), QKeySequence(m.value("keys").toString()));
   if (asker) reply(asker, {{"ev", "keyed"}, {"keys", m.value("keys").toString()}, {"focus", QApplication::focusWidget() ? QString(QApplication::focusWidget()->metaObject()->className()) : QString()}});
 }
 
@@ -3056,6 +3081,8 @@ void Host::sidebarFocus() {
 bool Host::eventFilter(QObject* o, QEvent* e) {
   if (!userActed_ && (e->type() == QEvent::KeyPress || e->type() == QEvent::MouseButtonPress) && e->spontaneous()) userActed_ = true;
   if (dockEvent(o, e)) return true;
+  // typing means the eyes are elsewhere: the preview of the entry under the mouse goes
+  if ((e->type() == QEvent::KeyPress || e->type() == QEvent::ShortcutOverride) && preview_ && preview_->isVisible()) hidePreview();
   // an entry with a live preview needs no tooltip as well: its details head the preview
   if (tree_ && o == tree_->viewport() && e->type() == QEvent::ToolTip)
     if (QTreeWidgetItem* it = tree_->itemAt(static_cast<QHelpEvent*>(e)->pos()); it && !termOfNode(it->data(0, Qt::UserRole).toString()).isEmpty()) return true;
@@ -3329,9 +3356,20 @@ void Host::registerGlobalKey() {
 }
 
 void Host::onGlobalShortcut(const QString& component, const QString& shortcut, qlonglong) {
-  if (component != "mc-term" || shortcut != "toggle") return;
-  if (!asks_.isEmpty() && isVisible()) { reattachDialogs(); return; } // a question is open: it comes forward
-  if (isVisible() && isActiveWindow() && !(windowState() & Qt::WindowMinimized)) { hide(); return; }
+  if (component == "mc-term" && shortcut == "toggle") toggleShown(false);
+}
+
+// Drop-down style: up front and full screen, or out of the way with its dialogs.
+void Host::toggleShown(bool showOnly) {
+  const bool up = isVisible() && !(windowState() & Qt::WindowMinimized);
+  // A folder picker runs a nested loop that hiding it would cancel: it only comes forward.
+  if (!showOnly && up && QApplication::activeWindow() && QThread::currentThread()->loopLevel() <= 1) {
+    for (QWidget* w : QApplication::topLevelWidgets())
+      if (auto* d = qobject_cast<QDialog*>(w); d && d->isVisible()) { stowed_ << d; d->hide(); }
+    hide();
+    return;
+  }
+  if (up && !asks_.isEmpty()) { reattachDialogs(); return; } // behind other windows: its question comes forward
   showInFront();
 }
 
@@ -3349,14 +3387,16 @@ void Host::showAsSet() {
   const bool fresh = !isVisible(); // a new surface: its dialogs need attaching again
   if (dropdown_) showFullScreen();
   else { show(); setWindowState(windowState() & ~Qt::WindowMinimized); }
-  if (fresh && !asks_.isEmpty()) QTimer::singleShot(0, this, &Host::reattachDialogs);
+  if (fresh && (!asks_.isEmpty() || !stowed_.isEmpty())) QTimer::singleShot(0, this, &Host::reattachDialogs);
 }
 
 // A window shown anew (Wayland gives it a new surface) leaves its open dialogs without a
 // parent: still modal, but free to fall behind it. Shown again, each is its child once more.
 void Host::reattachDialogs() {
-  for (FormDialog* d : asks_) {
-    if (!d) continue;
+  QList<QDialog*> all; // questions first: a confirmation over one is its child
+  for (FormDialog* d : asks_) if (d) all << d;
+  for (const QPointer<QDialog>& d : std::exchange(stowed_, {})) if (d && !all.contains(d.data())) all << d.data();
+  for (QDialog* d : all) {
     if (d->isVisible()) d->hide();
     d->show();
     d->raise();
@@ -3377,8 +3417,8 @@ void Host::showInFront() {
   raise();
   activateWindow();
 #ifdef MC_HAVE_XCB
-  if (auto* x11 = qGuiApp->nativeInterface<QNativeInterface::QX11Application>()) {
-    xcb_connection_t* c = x11->connection();
+  auto* x11 = qGuiApp->nativeInterface<QNativeInterface::QX11Application>();
+  if (xcb_connection_t* c = x11 ? x11->connection() : nullptr) { // offscreen has the interface, no connection
     static const char name[] = "_NET_ACTIVE_WINDOW";
     if (xcb_intern_atom_reply_t* atom = xcb_intern_atom_reply(c, xcb_intern_atom(c, 0, sizeof name - 1, name), nullptr)) {
       xcb_client_message_event_t ev{};
@@ -3613,6 +3653,10 @@ QStringList Host::tmuxFor(const QString& key, QString* session) const {
 }
 
 void Host::rebuildTree() {
+  // redrawn, the list would drop an editor open in it (F2) and whatever is being typed
+  treeHeld_ = false;
+  if (tree_) for (const QLineEdit* ed : tree_->viewport()->findChildren<QLineEdit*>()) treeHeld_ = treeHeld_ || ed->isVisible();
+  if (treeHeld_) return;
   // a section per machine: this one's projects under the caption, each other machine's
   // under a "PROJECTS @ <machine>" row that folds
   const QString here = remote_.isEmpty() ? qEnvironmentVariable("MC_TERM_HOSTNAME", QSysInfo::machineHostName().section('.', 0, 0)) : remote_.section('@', -1);

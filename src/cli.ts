@@ -13,7 +13,8 @@ import { ROOT, UsageError, load, type Role } from "./store.ts";
 const USAGE = `usage: my-claude [cui] [--remote user@host] <command> [args]   (no command: the menu)
   new    <project> [--goal TEXT] [--shared] [--profile P] [--color blue|orange|green|purple|red|yellow|teal|pink] [--ticket KEY]
   add    <project> <spec> [<spec>...] [--model M] [--takeover]
-         spec: <path> | <repo> | <org>/<repo> | <git url> | <PR url>, each with optional --branch B --name N
+         spec: <path> | <repo> | <org>/<repo> | <git url> | <PR url>, each with optional --branch B --name N --port P (repeatable;
+         P is PORT, HOST:CONTAINER or IP:HOST:CONTAINER, forwarded into its container)
          a path is symlinked into projects/<project>/; anything else is cloned there fresh
   rm     <project> <repo> [--force]      its clone is deleted (a linked repo only unlinked); readd: same path and conversation
   readd  <project> [<repo>]              re-add a removed repo (no repo: list what was removed)
@@ -276,7 +277,7 @@ async function main(argv: string[]): Promise<number> {
     case "ticket": {
       if (rest.length < 1 || rest.length > 2) usage();
       if (rest.length === 1) { console.log(load(rest[0]).ticket ?? "-"); return 0; }
-      const t = core.setTicket(rest[0], rest[1]);
+      const t = await core.setTicket(rest[0], rest[1]);
       console.log(t ? `${rest[0]} is for ${t}` : `${rest[0]}: ticket cleared`);
       return 0;
     }
@@ -300,6 +301,7 @@ async function main(argv: string[]): Promise<number> {
       console.log(`restored ${r.name}${r.recloned.length ? ` (cloned again: ${r.recloned.join(", ")})` : ""}`);
       for (const m of r.missing) console.error(`missing: ${m}  (re-create it at that path, or add it again)`);
       for (const m of r.leftOut) console.error(`left out ${m}`);
+      for (const m of r.notes) console.error(m);
       return r.missing.length ? 1 : 0;
     }
     case "next": case "prev": {

@@ -248,9 +248,10 @@ tests/gui-demo.sh          # try it in a sandbox: temp HOME, fake claude, privat
 - **Consoles** (`Ctrl+Shift+N`): plain shells on the machine of the tab in front, named
   console1, console2… (unique: rename one by double-clicking its tab). They share one
   panel that floats over the project, always on top, with a tab each; drag it by its title,
-  size it from its corner, minimise it to its title or maximise it. Closing the panel only
-  takes it off that project; the consoles live on (in tmux, `my-claude-consoles`).
-  Pinned, the panel shows over every project. The list has one Consoles entry per machine.
+  size it from its corner or maximise it. It goes when the keyboard leaves it for elsewhere in
+  the window, as it does with its X; the consoles live on (in tmux, `my-claude-consoles`).
+  Pinned, the panel stays, over every project. The list has one Consoles entry per machine,
+  each console under it: a click goes to it, **F2** renames it.
 - **It opens as you left it:** the project in front, the pane with the keyboard, zoomed and
   minimised panes, the consoles' panel (kept in `~/.config/my-claude/mc-term.conf`).
 - **The overview** (`Meta+Shift+W`): every open terminal at once, live; click one to go there.
@@ -285,7 +286,7 @@ global shortcuts) is refused, since it would never reach the window. Stored as `
 | `Ctrl+Shift+R` | relaunch a peer |
 | `Ctrl+Shift+C`, `Ctrl+Shift+V` | copy, paste (selecting text copies it too; right-click → Paste) |
 | `Ctrl+Shift+F` | find in scrollback |
-| `F2` (in the list) | rename the entry |
+| `F2` | rename the entry (in the list, or the pane's own) |
 | `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | this pane's text bigger / smaller / normal (`Ctrl+Shift+` the same for all panes) |
 | `Shift+PgUp/PgDn`, the wheel | scroll |
 | `F1` (hold it: on the window) | every key |
@@ -454,7 +455,8 @@ Environment: `MY_CLAUDE_ROOT` (checkout/data root, default the install dir),
 usage: my-claude [cui] [--remote user@host] <command> [args]   (no command: the menu)
   new    <project> [--goal TEXT] [--shared] [--profile P] [--color blue|orange|green|purple|red|yellow|teal|pink] [--ticket KEY]
   add    <project> <spec> [<spec>...] [--model M]
-         spec: <path> | <repo> | <org>/<repo> | <git url> | <PR url>, each with optional --branch B --name N
+         spec: <path> | <repo> | <org>/<repo> | <git url> | <PR url>, each with optional --branch B --name N --port P (repeatable;
+         P is PORT, HOST:CONTAINER or IP:HOST:CONTAINER, forwarded into its container)
          a path is symlinked into projects/<project>/; anything else is cloned there fresh
   rm     <project> <repo> [--force]      its clone is deleted (a linked repo only unlinked); readd: same path and conversation
   readd  <project> [<repo>]              re-add a removed repo (no repo: list what was removed)

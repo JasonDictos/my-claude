@@ -10,6 +10,7 @@
 #include <QList>
 #include <QMainWindow>
 #include <QPointer>
+#include <QDialog>
 #include <QElapsedTimer>
 #include <QProcessEnvironment>
 #include <QSet>
@@ -45,6 +46,7 @@ public:
   std::function<void()> finished, focused, bell, title;
   std::function<void(const QByteArray&)> send; // what the emulator made of the user's keys
   std::function<void(bool)> selected;
+  std::function<void(const QUrl&)> url;
 public slots:
   void onFinished() { if (finished) finished(); }
   void onFocused() { if (focused) focused(); }
@@ -122,9 +124,9 @@ struct ConsoleDock {
   class QSizeGrip* grip = nullptr;
   QTabWidget* tabs = nullptr;
   QStringList order;          // terminal ids
-  bool pinned = false, minimised = false, maximised = false;
+  bool pinned = false, maximised = false;
   QSet<QString> shownIn;      // the views it is up over: tab names, "" with no tab open
-  QRect normal;               // where it is, neither minimised nor maximised (in center_)
+  QRect normal;               // where it is when not maximised (in center_)
 };
 
 class Host : public QMainWindow {
@@ -273,7 +275,10 @@ private:
   bool copyOnSelect_ = true;
   bool dropdown_ = false; // Guake style: full screen, hidden on focus loss, summoned by the key
   void showAsSet();
+  void openLink(const QUrl& url);
   void reattachDialogs();
+  void toggleShown(bool showOnly);
+  QList<QPointer<QDialog>> stowed_; // dialogs hidden with the window, shown again with it
   qint64 scrollbackCap_ = 20LL << 30;     // bytes on disk before the largest history is dropped
   QProcessEnvironment childEnv() const;
   TmuxControl* controlFor(const QString& session);
@@ -312,6 +317,7 @@ private:
   void layoutDocks();
   void showDock(const QString& tab, bool focus);
   void hideDock(const QString& tab);
+  void dropDock(const QString& tab);
   void pinDock(const QString& tab, bool on);
   void saveDock(const ConsoleDock& d) const;
   void consoleAction(const QString& a);
@@ -329,6 +335,7 @@ private:
   QSet<QString> collapsed_;
   class QLabel* caption_ = nullptr; // this machine's section header ("PROJECTS @ <host>")
   bool hereFolded_ = false;
+  bool treeHeld_ = false; // a list update waiting for the name being edited in it
   bool menuHover_ = false; // the mouse moved over the Alt-shown menu bar
   class QFrame* preview_ = nullptr; // a terminal, live, while the mouse rests on its entry
   class QLabel* previewHead_ = nullptr;

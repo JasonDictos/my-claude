@@ -11,7 +11,11 @@ import { SEP, VIEW_PREFIX, ensureServer, historyLimit, nativePanes } from "./tmu
 export const SESSION = "my-claude-consoles";
 export const TAB = "_consoles"; // what the window calls their group (no project name starts with "_")
 export const NODE = `c:${TAB}`;
-const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/;
+// each console's own entry under it, and back
+export const nodeOf = (pane: string) => `${NODE}/${pane}`;
+export const paneOf = (node: string) => node.startsWith(`${NODE}/`) ? node.slice(NODE.length + 1) : "";
+export const NAME_MAX = 32; // the rename boxes stop there
+const NAME_RE = new RegExp(`^[A-Za-z0-9][A-Za-z0-9._-]{0,${NAME_MAX - 1}}$`);
 
 export interface Console { name: string; pane: string; window: string; index: number; command: string; shell: boolean }
 

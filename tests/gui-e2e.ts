@@ -161,6 +161,10 @@ if (r1.node !== "r:demo/r1") fail("pane should point at its sidebar entry", r1);
   await press("Ctrl+F");
   await u.shows("Ctrl+F in the list opens r1's folder", (x) => x.opened === `file://${r1path}`);
   await press("Ctrl+`");
+  // a link clicked in a terminal opens; an "email address" never does (boost-thread@1.90.0 is one)
+  u.send({ op: "link", url: "https://example.com/x" });
+  u.send({ op: "link", url: "mailto:boost-thread@1.90.0" });
+  await u.shows("the web link opened, the address not", (x) => x.opened === "https://example.com/x");
 }
 // what is typed reaches the pane's program (here: the tty echoes it), and shows
 u.send({ op: "send", id: r1.id, text: "typed-in-r1" });
@@ -193,6 +197,11 @@ await key("Ctrl+Shift+P");
 await u.shows("Ctrl+Shift+P moves back", (x) => term(x, r1.id)?.active === true);
 if ((await key("Ctrl+`")).focus !== "QTreeWidget") fail("Ctrl+` should put the keyboard in the project list");
 if (!/Konsole|Terminal/.test((await key("Ctrl+`")).focus)) fail("Ctrl+` again should go back to the pane");
+// the live preview of an entry the mouse rests on goes away once you type
+u.send({ op: "hover", node: "r:demo/r2" });
+await u.shows("r2's preview", (x) => x.preview === x.terminals.find((t: any) => t.title.startsWith("r2"))?.id);
+await key("a");
+await u.shows("typing dismisses the preview", (x) => x.preview === "");
 
 // --- consoles: shells on this machine, not a project's, in a panel over the project
 const run = (action: string) => u.send({ op: "run", action });
@@ -222,18 +231,68 @@ await u.shows("console2 renamed", (x) => ctabs(x) === "console1,build");
 if (conTmux() !== "console1,build") fail("the console's tmux window should carry its name", conTmux());
 u.send({ op: "emit", event: { ev: "rename", id: c2.id, name: "console1" } });
 l = await u.shows("a taken name refused, with an error", (x) => x.asks.length > 0);
+if (!dock(l).visible) fail("a dialog over the consoles should not put their panel away");
 u.send({ op: "answer", id: l.asks[0], cancelled: true });
 if (conTmux() !== "console1,build") fail("two consoles must never share a name", conTmux());
-// the panel: maximised and back, minimised to its title strip and back
+// each console an entry of its own under Consoles: renamed there (F2), a click goes to it
+const conNode = (x: any, id: string) => x.nodes.find((n: any) => n.id === `c:${id}`);
+await u.shows("console1 and build listed under Consoles", (x) => conNode(x, c1.id)?.label === "console1" && conNode(x, c2.id)?.label === "build");
+u.send({ op: "emit", event: { ev: "rename", node: `c:${c2.id}`, name: "logs" } });
+await u.shows("build renamed from the list", (x) => ctabs(x) === "console1,logs" && conNode(x, c2.id)?.label === "logs");
+if (conTmux() !== "console1,logs") fail("a console renamed in the list should carry the name in tmux", conTmux());
+u.send({ op: "emit", event: { ev: "rename", node: `c:${c2.id}`, name: "build" } });
+await u.shows("and back", (x) => ctabs(x) === "console1,build");
+u.send({ op: "sidebar" }); u.send({ op: "sidebar", select: `c:${c2.id}` });
+if ((await key("F2")).focus !== "QLineEdit") fail("F2 on a console's entry should open its name for editing");
+await key("Escape");
+// a name longer than a console may have stops at the box (32), nothing to refuse: in the list,
+// and in the panel's own rename box
+u.send({ op: "sidebar", select: `c:${c2.id}` });
+await key("F2");
+for (let i = 0; i < 40; i++) await key("x");
+await key("Return");
+await u.shows("40 typed in the list, 32 kept", (x) => ctabs(x) === `console1,${"x".repeat(32)}`);
+if ((await u.list()).asks.length) fail("a long console name should be cut at the box, not refused");
+u.send({ op: "focus", id: c2.id });
+await u.shows("its console with the keyboard", (x) => conOf(x, "x".repeat(32))?.active === true);
+run("host.console-rename");
+{
+  let f = "";
+  for (let i = 0; i < 50 && f !== "QLineEdit"; i++) { f = (await key("Shift")).focus; if (f !== "QLineEdit") await Bun.sleep(100); }
+  if (f !== "QLineEdit") fail("the panel's rename box should open with the keyboard", { focus: f, dialogs: (await u.list()).dialogsShown });
+}
+await key("Ctrl+A");
+for (let i = 0; i < 40; i++) await key("y");
+await key("Return");
+await u.shows("40 typed in the panel's box, 32 kept", (x) => ctabs(x) === `console1,${"y".repeat(32)}`);
+if ((await u.list()).asks.length) fail("a long console name should be cut at the panel's box, not refused");
+u.send({ op: "emit", event: { ev: "rename", node: `c:${c2.id}`, name: "build" } });
+await u.shows("build again", (x) => ctabs(x) === "console1,build");
+u.send({ op: "sidebar", select: `c:${c2.id}` }); u.send({ op: "emit", event: { ev: "select", node: `c:${c2.id}` } });
+await u.shows("a click on build's entry: build in front, with the keyboard", (x) => dock(x).visible && dock(x).current === "build" && conOf(x, "build")?.active === true);
+// the panel: maximised and back; Ctrl+M puts it away (it has no strip to shrink to)
 u.send({ op: "focus", id: c1.id });
 await key("Ctrl+Shift+Z");
 await u.shows("maximised", (x) => dock(x).maximised === true);
 await key("Ctrl+Shift+Z");
 await u.shows("restored", (x) => dock(x).maximised === false);
 await key("Ctrl+M");
-await u.shows("minimised, still on the view", (x) => dock(x).minimised === true && dock(x).visible);
+await u.shows("Ctrl+M: the panel put away, its consoles kept", (x) => !dock(x).visible && dock(x).count === 2);
 u.send({ op: "focus", id: c1.id });
-await u.shows("back with the keyboard", (x) => dock(x).minimised === false && conOf(x, "console1")?.active === true);
+await u.shows("back with the keyboard", (x) => dock(x).visible && conOf(x, "console1")?.active === true);
+// the keyboard elsewhere in the window puts it away too, unless it is pinned
+u.send({ op: "focus", id: r1.id });
+await u.shows("r1 with the keyboard: the panel gone", (x) => !dock(x).visible && term(x, r1.id)?.active === true);
+u.send({ op: "focus", id: c1.id });
+await u.shows("console1 again", (x) => dock(x).visible && conOf(x, "console1")?.active === true);
+run("host.console-pin");
+await u.shows("pinned", (x) => dock(x).pinned === true);
+u.send({ op: "focus", id: r1.id });
+await u.shows("pinned: it stays with the keyboard elsewhere", (x) => dock(x).visible && term(x, r1.id)?.active === true);
+run("host.console-pin");
+await u.shows("unpinned", (x) => dock(x).pinned === false);
+u.send({ op: "focus", id: c1.id });
+await u.shows("console1 with the keyboard", (x) => dock(x).visible && conOf(x, "console1")?.active === true);
 // show/hide: off the view, the consoles live on; back without a new one
 run("host.consoles");
 await u.shows("the panel off demo", (x) => dock(x).visible === false && dock(x).count === 2);
@@ -268,19 +327,37 @@ const shell = l.terminals.find((t: any) => t.title === "shell:r1");
 await u.shows("the shell focused", (x) => x.terminals.find((t: any) => t.id === shell.id)?.active === true);
 // in the sidebar under r1, as a shell (an icon says host or container; no repo in the label)
 await u.shows("the shell in the sidebar", (x) => x.nodes.some((n: any) => n.id === `t:demo/${shell.id.split("/").pop()}` || (n.id.startsWith("t:demo/") && /shell$/.test(n.label))));
-// --- Ctrl+Shift+X on it: asks, then only the shell goes
-await key("Ctrl+Shift+X");
-await u.answer({});
-await u.shows("the shell gone", (x) => titles(x) === "r1,r2");
+// --- Ctrl+Shift+X on it: while it runs something it asks (cancel keeps it); idle, it just goes
+{
+  const pane = shell.id.split("/").pop();
+  u.send({ op: "send", id: shell.id, text: "sleep 300\r" });
+  for (let i = 0; i < 50 && tmux("display-message", "-p", "-t", pane, "#{pane_current_command}") !== "sleep"; i++) await Bun.sleep(100);
+  await key("Ctrl+Shift+X");
+  await u.answer(null);
+  await Bun.sleep(500);
+  if (titles(await u.list()) !== "r1,r2,shell:r1") fail("a cancelled close closed");
+  u.send({ op: "send", id: shell.id, text: "\u0003" });
+  for (let i = 0; i < 50 && tmux("display-message", "-p", "-t", pane, "#{pane_current_command}") === "sleep"; i++) await Bun.sleep(100);
+  u.send({ op: "focus", id: shell.id });
+  await key("Ctrl+Shift+X");
+  await u.shows("the idle shell gone, nothing asked", (x) => titles(x) === "r1,r2" && x.asks.length === 0);
+}
 if (record("demo").peers.length !== 2) fail("closing a shell must not remove a peer");
 
 // --- add a repo from the sidebar, then remove it: one linked from elsewhere goes at once and stays
 // on disk; a clone is deleted, and asks first when it holds work nothing else has (cancel keeps it)
 u.act("project.add", { node: "p:demo" });
-await u.answer({ spec: join(tmp, "r3") });
+await u.answer({ spec: join(tmp, "r3"), ports: "20808  8080:80" });
 l = await u.shows("r3 added", (x) => titles(x) === "r1,r2,r3");
-u.act("pane.close", { id: l.terminals.find((t: any) => t.title === "r3").id, focus: "term", tab: "demo" }); // on a peer's pane: removes the peer
-await u.shows("r3 removed, nothing asked", (x) => titles(x) === "r1,r2" && x.asks.length === 0);
+if (JSON.stringify(record("demo").peers.find((x: any) => x.repo === "r3")?.ports) !== '["20808","8080:80"]') fail("the dialog's ports should be kept on the repo", record("demo"));
+// on a peer's pane: removes the peer, asked first even when nothing would be lost
+u.act("pane.close", { id: l.terminals.find((t: any) => t.title === "r3").id, focus: "term", tab: "demo" });
+await u.answer(null);
+await Bun.sleep(500);
+if (!record("demo").peers.some((x: any) => x.repo === "r3")) fail("a cancelled close removed r3");
+u.act("pane.close", { id: l.terminals.find((t: any) => t.title === "r3").id, focus: "term", tab: "demo" });
+await u.answer({});
+await u.shows("r3 removed", (x) => titles(x) === "r1,r2");
 if (!existsSync(join(tmp, "r3"))) fail("a linked repo must stay on disk");
 {
   const git = (...a: string[]) => { if (Bun.spawnSync(["git", ...a]).exitCode !== 0) fail(`git ${a.join(" ")}`); };
@@ -386,24 +463,56 @@ await u.shows("Ctrl+Shift+Tab goes to the project's next pane", (x) => x.current
 await key("Ctrl+Tab");
 await u.shows("Ctrl+Tab comes round to the first project", (x) => x.current === cur);
 if (record("second-one").peers[0].repo !== "r3" || record("second-one").color !== "green") fail("new project record", record("second-one"));
-// consoles pinned: over every project; unpinned, back to the one they were opened on
+// consoles pinned: over every project; unpinned, gone once the keyboard leaves them
 u.send({ op: "tab", tab: "demo", focus: true });
 await u.shows("demo in front", (x) => x.current === "demo");
 run("host.consoles");
-await u.shows("a console over demo", (x) => dock(x)?.visible && dock(x).count === 1);
+l = await u.shows("a console over demo", (x) => dock(x)?.visible && dock(x).count === 1);
+const con1 = l.terminals.find((t: any) => t.tab === "_consoles").id;
 u.send({ op: "tab", tab: "second-one", focus: true });
 await u.shows("second-one in front, the consoles not over it", (x) => x.current === "second-one" && dock(x) && !dock(x).visible);
 run("host.console-pin");
 await u.shows("pinned: over second-one", (x) => dock(x).visible && dock(x).pinned);
 u.send({ op: "tab", tab: "demo", focus: true });
 await u.shows("and over demo", (x) => x.current === "demo" && dock(x).visible);
+u.send({ op: "focus", id: con1 });
+await u.shows("the console with the keyboard", (x) => term(x, con1)?.active === true);
 run("host.console-pin");
+await u.shows("unpinned, still up over demo", (x) => x.current === "demo" && dock(x).visible && !dock(x).pinned);
 u.send({ op: "tab", tab: "second-one", focus: true });
-await u.shows("unpinned on demo: not over second-one", (x) => x.current === "second-one" && !dock(x).visible && !dock(x).pinned);
+await u.shows("the keyboard off to second-one: not over it", (x) => x.current === "second-one" && !dock(x).visible);
 u.send({ op: "tab", tab: "demo", focus: true });
-l = await u.shows("still over demo", (x) => x.current === "demo" && dock(x).visible);
-u.send({ op: "send", id: l.terminals.find((t: any) => t.tab === "_consoles").id, text: "exit\r" });
+await u.shows("demo in front again", (x) => x.current === "demo");
+await Bun.sleep(300);
+if (dock(await u.list()).visible) fail("an unpinned panel the keyboard left should be gone from demo too");
+u.send({ op: "send", id: con1, text: "exit\r" });
 await u.shows("no consoles", (x) => !dock(x) || dock(x).count === 0);
+// --- more panes than fit: a shell on demo's second screen is still on screen on coming back
+u.send({ op: "look", perGroup: 2 });
+u.send({ op: "focus", id: l.terminals.find((t: any) => t.tab === "demo" && t.title === "r1").id });
+await key("Ctrl+Shift+H");
+l = await u.shows("a shell past demo's first screen", (x) => /^r1,r2( ★)?,shell:r1$/.test(titles(x, "demo")) && x.terminals.find((t: any) => t.title === "shell:r1")?.active === true);
+{
+  const sub = l.terminals.find((t: any) => t.title === "shell:r1");
+  const onSub = (x: any) => x.current === "demo" && term(x, sub.id)?.onScreen === true;
+  // a click on an entry: the list takes the keyboard and its current entry changes, and the driver hears of it
+  const click = (node: string) => { u.send({ op: "sidebar" }); u.send({ op: "sidebar", select: node }); u.send({ op: "emit", event: { ev: "select", node } }); };
+  const away = async (how: string, go: () => Promise<unknown> | void, back: () => Promise<unknown> | void) => {
+    u.send({ op: "focus", id: sub.id });
+    await u.shows(`${how}: the shell on screen`, (x) => onSub(x) && term(x, sub.id).active);
+    await go();
+    await u.shows(`${how}: second-one in front`, (x) => x.current === "second-one");
+    await back();
+    await u.shows(`${how}: back on demo, the shell still on screen`, onSub);
+  };
+  await away("clicks in the list", () => click("p:second-one"), () => click("p:demo"));
+  await away("Ctrl+Tab", () => key("Ctrl+Tab"), () => key("Ctrl+Tab"));
+  await away("the tabs", () => { u.send({ op: "tab", tab: "second-one", focus: true }); }, () => { u.send({ op: "tab", tab: "demo", focus: true }); });
+  await away("walking the list", () => { u.send({ op: "sidebar" }); u.send({ op: "sidebar", select: "p:second-one" }); }, () => { u.send({ op: "sidebar", select: "p:demo" }); });
+  u.send({ op: "send", id: sub.id, text: "exit\r" });
+  await u.shows("the shell gone", (x) => !titles(x, "demo").includes("shell:"));
+}
+u.send({ op: "look", perGroup: 4 });
 // a project started behind the window's back (the CLI, an agent) gets its tab too
 sh("bun", [join(root, "src/cli.ts"), "new", "third"]); sh("bun", [join(root, "src/cli.ts"), "add", "third", join(tmp, "r4")]); sh("bun", [join(root, "src/cli.ts"), "up", "third", "--no-attach"]);
 await u.shows("third appears", (x) => x.tabs.join() === "demo,second-one,third" && titles(x, "third") === "r4");
@@ -422,6 +531,68 @@ u.act("app.undelete");
   await u.answer({ which: `.|${dir}` });
 }
 await u.shows("third undeleted", (x) => x.nodes.some((n: any) => n.id === "p:third"), 20000);
+// one whose repo is cloned again: greyed, the repo animated, while that runs; a Start meanwhile waits
+{
+  const cli = (...a: string[]) => sh("bun", [join(root, "src/cli.ts"), ...a]);
+  const up4 = join(tmp, "up4");
+  sh("git", ["init", "-q", "-b", "main", up4]); sh("git", ["-C", up4, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "one"]);
+  cli("new", "fourth"); cli("add", "fourth", `file://${up4}`); cli("delete", "fourth");
+  writeFileSync(join(tmp, "hold-clones"), ""); // tests/gui.sh's git waits while this is there
+  u.act("app.undelete");
+  const dir = readdirSync(join(root, ".trash")).find((d) => d.endsWith("-fourth"));
+  if (!dir) fail("fourth should be in the trash", readdirSync(join(root, ".trash")));
+  await u.answer({ which: `.|${dir}` });
+  const node = (x: any, id: string) => x.nodes.find((n: any) => n.id === id);
+  await u.shows("fourth greyed, its repo greyed and animated while it is cloned", (x) => node(x, "p:fourth")?.dim === true && node(x, "r:fourth/up4")?.dim === true && node(x, "r:fourth/up4")?.state === "work", 20000);
+  u.send({ op: "emit", event: { ev: "activate", node: "p:fourth" } });
+  await Bun.sleep(1500);
+  if ((await u.list()).tabs.includes("fourth")) fail("fourth started before its repo was cloned");
+  rmSync(join(tmp, "hold-clones"));
+  await u.shows("then started, on the whole clone", (x) => /^up4( ★)?$/.test(titles(x, "fourth")) && node(x, "p:fourth")?.dim === false, 30000);
+  u.act("project.delete", { node: "p:fourth" });
+  await u.shows("fourth deleted", (x) => !x.nodes.some((n: any) => n.id === "p:fourth"));
+}
+// a project still being set up (New project, or its first repo added): a Start meanwhile
+// waits for its repos instead of calling it unconfigured; greyed until then
+{
+  const cli = (...a: string[]) => sh("bun", [join(root, "src/cli.ts"), ...a]);
+  const origin = (n: string) => {
+    const d = join(tmp, n);
+    sh("git", ["init", "-q", "-b", "main", d]); sh("git", ["-C", d, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "one"]);
+    return `file://${d}`;
+  };
+  const driverLog = () => { try { return readFileSync(join(process.env.HOME!, ".cache/my-claude/gui-driver.log"), "utf8"); } catch { return ""; } };
+  const node = (x: any, id: string) => x.nodes.find((n: any) => n.id === id);
+  const startMidClone = async (name: string, repo: string) => {
+    await u.shows(`${name} in the list while ${repo} is cloned`, (x) => !!node(x, `p:${name}`), 20000);
+    u.send({ op: "emit", event: { ev: "activate", node: `p:${name}` } });
+    await Bun.sleep(1000);
+    if (driverLog().includes(`${name} is unconfigured`)) fail(`a Start while ${name} is being set up should wait for it, not call it unconfigured`);
+    if (node(await u.list(), `p:${name}`)?.dim !== true) fail(`${name} should be greyed while it is set up`);
+    rmSync(join(tmp, "hold-clones"));
+    await u.shows(`then ${name} started`, (x) => new RegExp(`^${repo}( ★)?$`).test(titles(x, name)) && node(x, `p:${name}`)?.dim === false, 30000);
+  };
+  writeFileSync(join(tmp, "hold-clones"), "");
+  u.act("app.new");
+  await u.answer({ name: "fifth", repos: origin("up5"), mode: "per-repo", color: "green" });
+  await startMidClone("fifth", "up5");
+  cli("new", "sixth");
+  await u.shows("sixth in the list", (x) => !!node(x, "p:sixth"));
+  writeFileSync(join(tmp, "hold-clones"), "");
+  u.act("project.add", { node: "p:sixth" });
+  await u.answer({ spec: origin("up6") });
+  await startMidClone("sixth", "up6");
+  // a repos line it cannot read is refused before the project is made, not after
+  u.act("app.new");
+  await u.answer({ name: "seventh", repos: "--branch dev up7", mode: "per-repo", color: "green" });
+  await u.answer(null); // the error's own dialog
+  if (!driverLog().includes("--branch before any repo")) fail("a bad repos line should be reported");
+  if (existsSync(join(root, "projects", "seventh"))) fail("a bad repos line should leave no project behind");
+  for (const n of ["fifth", "sixth"]) {
+    u.act("project.delete", { node: `p:${n}` });
+    await u.shows(`${n} deleted`, (x) => !x.nodes.some((y: any) => y.id === `p:${n}`));
+  }
+}
 
 // --- a repo whose conversation is open in a Claude started by hand: starting the project
 // asks to take it over, and taking over moves it into the window
@@ -559,6 +730,28 @@ await u.shows("its own name back", (x) => x.nodes.some((n: any) => n.id === "p:d
 u.send({ op: "emit", event: { ev: "rename", node: "r:demo/r2", name: "the web one" } });
 await u.shows("the peer renamed", (x) => x.nodes.some((n: any) => n.id === "r:demo/r2" && n.label.startsWith("the web one")));
 if (record("demo").peers.find((x: any) => x.repo === "r2")?.label !== "the web one") fail("the peer's display name should be in its record", record("demo").peers);
+// F2 itself: the entry's name in an editor that takes typing, also while the list is redrawn;
+// walking the list, and after a click on the entry (which puts the keyboard in its pane)
+u.send({ op: "sidebar" }); u.send({ op: "sidebar", select: "r:demo/r2" });
+if ((await key("F2")).focus !== "QLineEdit") fail("F2 in the list should open the entry's name for editing");
+await key("Escape");
+u.send({ op: "sidebar", select: "r:demo/r1" }); u.send({ op: "emit", event: { ev: "select", node: "r:demo/r1" } });
+await u.shows("r1's pane with the keyboard after a click", (x) => x.terminals.find((t: any) => t.node === "r:demo/r1")?.active === true);
+for (let i = 0; i < 50 && !/Konsole|Terminal/.test((await key("Shift")).focus); i++) await Bun.sleep(100);
+await key("F2"); // (through the driver: it says which entry)
+{
+  let f = "";
+  for (let i = 0; i < 50 && f !== "QLineEdit"; i++) { await Bun.sleep(100); f = (await key("Shift")).focus; }
+  if (f !== "QLineEdit") fail("F2 after a click on the entry should open its name for editing", f);
+}
+u.send({ op: "emit", event: { ev: "rename", node: "p:demo", name: "Redrawn" } }); // the list changes under the editor
+for (let i = 0; i < 50 && record("demo").label !== "Redrawn"; i++) await Bun.sleep(100);
+await Bun.sleep(500); // and the driver sends the new list
+for (const c of "xyz") if ((await key(c)).focus !== "QLineEdit") fail(`typing ${c} should go into the editor`);
+await key("Return");
+await u.shows("the peer renamed by typing, and the list as it changed meanwhile", (x) => x.nodes.some((n: any) => n.id === "r:demo/r1" && n.label === "xyz") && x.nodes.some((n: any) => n.id === "p:demo" && n.label === "Redrawn"));
+u.send({ op: "emit", event: { ev: "rename", node: "p:demo", name: "" } });
+u.send({ op: "emit", event: { ev: "rename", node: "r:demo/r1", name: "" } });
 
 // --- settings are settings.json, merged
 u.send({ op: "emit", event: { ev: "settings", values: { general: { profile: "host", defaultOrg: "acme", chatName: "", peersCli: "/nonexistent/claude-peers-cli", panesPerWindow: 6, panel: true }, window: { font: "", fontSize: 0, scheme: "", openOnStart: true } } } });
@@ -567,6 +760,23 @@ const cfgFile = join(process.env.HOME!, ".config", "my-claude", "settings.json")
 for (let i = 0; i < 40 && !(existsSync(cfgFile) && readFileSync(cfgFile, "utf8").includes('"acme"')); i++) await Bun.sleep(100);
 const cfg = JSON.parse(readFileSync(cfgFile, "utf8"));
 if (cfg.clone?.defaultOrg !== "acme" || cfg.profile !== "host" || cfg.peers?.cli !== "/nonexistent/claude-peers-cli" || "chat" in cfg && cfg.chat.name) fail("settings not merged into settings.json", cfg);
+// Add repos with an org: the keyboard starts in the picker's search box, to type a repo's name
+{
+  u.act("project.add", { node: "p:demo" });
+  await u.shows("the add-repos dialog", (x) => x.asks.length > 0);
+  await u.shows("the repo search box with the keyboard", (x) => x.askFocus === "QLineEdit");
+  await u.answer(null);
+}
+// Enter in the repo search ticks the repo by that name, not the first row that mentions it
+u.send({ op: "ask", id: "t-pick", title: "Pick", ok: "Add", schema: { type: "object", properties: { pick: { type: "array", format: "picker",
+  columns: ["Repo", "Description"], enum: ["acme-cmake", "acme-ports"], enumRows: [["acme-cmake", "Build tooling used on acme-ports base images"], ["acme-ports", "Ports"]] } } } });
+await u.shows("the picker", (x) => x.asks.includes("t-pick"));
+u.send({ op: "type", dialog: "t-pick", text: "acme-ports", enter: true });
+{
+  const t = await u.until("typed");
+  if (JSON.stringify(t.values?.pick) !== '["acme-ports"]') fail("Enter should tick acme-ports", t);
+}
+await u.shows("the picker answered", (x) => !x.asks.includes("t-pick"));
 
 // --- the window closes: everything keeps running; it opens again on the same panes
 u.send({ op: "quit" });
@@ -603,18 +813,24 @@ await host!.exited;
     (x) => x.current === "demo" && term(x, r2.id)?.zoomed === true && dock(x)?.visible === true && term(x, con.id)?.active === true, 20000);
   u.send({ op: "send", id: con.id, text: "exit\r" });
   await u.shows("no consoles", (x) => !dock(x) || dock(x).count === 0);
-  // a working agent's frames step while the window is out of sight too: on Wayland it never
-  // learns it is back on screen (last: offscreen, a hidden window does not come back active)
+  // Last: offscreen, a window shown again does not come back active.
+  // The show/hide key takes an open dialog away with the window and brings both back; while
+  // hidden, a working agent's frames still step (on Wayland it never learns it is back on screen).
   {
     const mark = join(root, "projects", "demo", ".attn", "r2");
     const node = (x: any) => x.nodes.find((n: any) => n.id === "r:demo/r2");
     writeFileSync(mark, "work");
     await u.shows("r2 working", (x) => node(x)?.state === "work");
+    u.act("project.add", { node: "p:demo" });
+    await u.shows("the add-repos dialog", (x) => x.asks.length > 0 && x.dialogsShown > 0);
     u.send({ op: "toggle" });
-    await u.shows("the window hidden", (x) => x.shown === false);
+    await u.shows("the window and its dialog hidden", (x) => x.shown === false && x.dialogsShown === 0);
     const unseen = new Set<string>();
     for (const t0 = Date.now(); Date.now() - t0 < 1000; await Bun.sleep(40)) unseen.add(node(await u.list())?.icon);
     if (unseen.size < 3) fail("frames should step while the window is hidden", [...unseen]);
+    u.send({ op: "toggle" });
+    await u.shows("both back", (x) => x.shown === true && x.dialogsShown > 0);
+    await u.answer(null);
     rmSync(mark);
   }
   u.send({ op: "quit" });
