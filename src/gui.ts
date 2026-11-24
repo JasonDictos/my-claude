@@ -333,6 +333,14 @@ class Driver {
   private pendingFocus: string | null = null;
   private pendingFocusAge = 0;
   private pendingTab: string | null = null;
+  // The window's focus serial (moves the user made) as of the event being handled. What the
+  // user starts and leaves to finish later takes the keyboard only if they have not moved since:
+  // the window checks it (ifFocus).
+  private serialAtEvent = 0;
+  private pendingTabSince: number | undefined;
+  private pendingFocusSince: number | undefined;
+  private ifFocus = (since: number | undefined) => (since === undefined ? {} : { ifFocus: since });
+  private focusLater(id: string, since?: number): void { this.pendingFocus = id; this.pendingFocusAge = 0; this.pendingFocusSince = since; }
   // projects being set up (undelete cloning their repos): greyed, their repos animated until done
   private settingUp = new Set<string>();
   // plans shown over an agent's pane, by its term id: the file, and when it was last sent
@@ -538,11 +546,11 @@ class Driver {
     this.alerts(snaps);
 
     if (this.pendingTab && this.shown.has(this.pendingTab)) {
-      this.send({ op: "tab", tab: this.pendingTab, focus: true });
+      this.send({ op: "tab", tab: this.pendingTab, focus: true, ...this.ifFocus(this.pendingTabSince) });
       this.pendingTab = null;
     }
     if (this.pendingFocus) {
-      if (this.terms.has(this.pendingFocus)) { this.send({ op: "focus", id: this.pendingFocus }); this.pendingFocus = null; }
+      if (this.terms.has(this.pendingFocus)) { this.send({ op: "focus", id: this.pendingFocus, ...this.ifFocus(this.pendingFocusSince) }); this.pendingFocus = null; }
       else if (++this.pendingFocusAge > 6) this.pendingFocus = null;
     }
   }
@@ -600,7 +608,7 @@ class Driver {
         this.sent.delete(`order:${name}`); // the window appends what it opens: say the order again
         this.terms.set(spec.id, spec);
         this.sent.set(`term:${spec.id}`, JSON.stringify(spec));
-        this.send({ op: "open", ...spec, ...how, focus: this.pendingFocus === spec.id });
+        this.send({ op: "open", ...spec, ...how, focus: this.pendingFocus === spec.id, ...(this.pendingFocus === spec.id ? this.ifFocus(this.pendingFocusSince) : {}) });
         if (this.pendingFocus === spec.id) this.pendingFocus = null;
       } else if (this.sent.get(`term:${spec.id}`) !== JSON.stringify(spec)) {
         this.terms.set(spec.id, spec);
@@ -640,7 +648,7 @@ class Driver {
         this.sent.delete(`order:${consoles.TAB}`);
         this.terms.set(spec.id, spec);
         this.sent.set(`term:${spec.id}`, JSON.stringify(spec));
-        this.send({ op: "open", ...spec, ...how, focus: this.pendingFocus === spec.id });
+        this.send({ op: "open", ...spec, ...how, focus: this.pendingFocus === spec.id, ...(this.pendingFocus === spec.id ? this.ifFocus(this.pendingFocusSince) : {}) });
         if (this.pendingFocus === spec.id) this.pendingFocus = null;
       } else if (this.sent.get(`term:${spec.id}`) !== JSON.stringify(spec)) {
         this.terms.set(spec.id, spec);
@@ -953,6 +961,7 @@ class Driver {
   // ---- what the window reports
 
   private onEvent(ev: Dict): void {
+    if (typeof ev.focusSerial === "number") this.serialAtEvent = ev.focusSerial;
     switch (ev.ev) {
       case "hello": this.applyLook(config()); if (config().gui?.toggleKey !== undefined) this.send({ op: "globalKey", keys: String(config().gui.toggleKey) }); break;
       case "list": this.lists.shift()?.(ev); break;
@@ -962,7 +971,7 @@ class Driver {
         done?.(ev.cancelled ? null : (ev.values ?? {}));
         break;
       }
-      case "opened": if (this.pendingFocus === ev.id) { this.send({ op: "focus", id: ev.id }); this.pendingFocus = null; } break;
+      case "opened": if (this.pendingFocus === ev.id) { this.send({ op: "focus", id: ev.id, ...this.ifFocus(this.pendingFocusSince) }); this.pendingFocus = null; } break;
       case "exited": case "closed":
         // Its view ended: the pane closed, or only the view did (prefix+d, prefix+n). The
         // next look reopens what still has a pane.
@@ -971,7 +980,7 @@ class Driver {
         setTimeout(() => this.requestSync(), 250);
         break;
       case "nudge":
-        if (ev.focus) { this.pendingFocus = String(ev.focus); this.pendingFocusAge = 0; }
+        if (ev.focus) this.focusLater(String(ev.focus));
         this.requestSync();
         break;
       case "tab-close": this.hide(String(ev.tab)); break;
@@ -1028,10 +1037,12 @@ class Driver {
     this.hidden.add(name);
     this.requestSync();
   }
-  private show(name: string): void {
+  // In front; `since`: only if the user has not moved since then.
+  private show(name: string, since?: number): void {
     this.hidden.delete(name);
     this.shown.add(name);
     this.pendingTab = name;
+    this.pendingTabSince = since;
     this.requestSync();
   }
 
@@ -1051,6 +1062,7 @@ class Driver {
   }
 
   private async openProject(name: string, focus: string | null = null): Promise<void> {
+    const since = this.serialAtEvent; // starting may take a while: the user may move on meanwhile
     // work on it under way (its repos being cloned in): decide on what that leaves
     const s = this.active.has(name)
       ? await this.chains.get(name)!.then(async () => (await core.snapshot()).find((x) => x.project.name === name) ?? null)
@@ -1075,8 +1087,8 @@ class Driver {
         await core.syncGroupNow(name);
       });
     }
-    if (focus) { this.pendingFocus = focus; this.pendingFocusAge = 0; }
-    this.show(name);
+    if (focus) this.focusLater(focus, since);
+    this.show(name, since);
   }
 
   // A path Ctrl+clicked in a pane: from the pane's folder, else its repo's, opened on the desktop.
@@ -1221,10 +1233,10 @@ class Driver {
   // ---- the actions
 
   private async consoleNew(): Promise<void> {
+    const since = this.serialAtEvent;
     await this.work(consoles.TAB, "", async () => {
       const pane = await consoles.open();
-      this.pendingFocus = `${consoles.TAB}/${pane}`;
-      this.pendingFocusAge = 0;
+      this.focusLater(`${consoles.TAB}/${pane}`, since);
     });
   }
   // Shown over the tab in front; with none yet, the first one is opened.
@@ -1250,10 +1262,11 @@ class Driver {
     const s = this.snap(name);
     if (!s?.up) throw new Error(`${name} is not running: start it first`);
     if (!this.shown.has(name)) this.show(name);
+    const since = this.serialAtEvent;
     await this.work(name, "", async () => {
       if (this.snap(name)?.project.layout !== "solo") await core.setLayout(name, "solo");
       const pane = await make();
-      if (pane) { this.pendingFocus = `${name}/${pane}`; this.pendingFocusAge = 0; }
+      if (pane) this.focusLater(`${name}/${pane}`, since);
     });
   }
 
@@ -1400,6 +1413,7 @@ class Driver {
   }
 
   private async createProject(name: string, o: { goal?: string; shared?: boolean; color?: string; ticket?: string }, repos: string): Promise<void> {
+    const since = this.serialAtEvent; // clones take a while: in front at the end only if the user stayed
     await this.work(name, `creating ${name}…`, async () => {
       core.splitRepoSpecs(repos); // a line it cannot read leaves no empty project behind
       core.newProject(name, { goal: o.goal || undefined, shared: o.shared, color: o.color, ticket: o.ticket || undefined });
@@ -1411,7 +1425,7 @@ class Driver {
         await core.ensureBinary();
         await core.up(name, { takeover: true }); // its repos were just added: wanted here
         await core.syncGroupNow(name);
-        this.show(name);
+        this.show(name, since);
       } finally { this.settingUp.delete(name); }
     });
   }

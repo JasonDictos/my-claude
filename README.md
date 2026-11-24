@@ -260,6 +260,9 @@ tests/gui-demo.sh          # try it in a sandbox: temp HOME, fake claude, privat
   opens it over the agent's pane; select a passage, type a question, Enter, and the agent
   gets it in its prompt as `[review] <path>:<lines>` quoting the passage. The panel reloads
   when the agent edits the plan. `my-claude install --skills` links the skill in.
+- **It does not take the keyboard from you:** what you start and leave to finish (a new
+  project cloning, a Start, a new console or shell) comes to the front when ready only if
+  you have not moved since; otherwise its tab opens behind where you went.
 - **Back and forward, as in a browser:** every place the keyboard goes (a pane, a console,
   another project) is a point, with the view as you left it there (zoom, minimised panes,
   the consoles' panel); the mouse's back and forward buttons walk them, and the stack is

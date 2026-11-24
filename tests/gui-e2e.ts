@@ -475,7 +475,7 @@ await u.shows("demo back", (x) => titles(x) === "r1,r2 ★");
 // --- a new project from the dialog: created, repos added, started, shown
 u.act("app.new");
 await u.answer({ name: "Second One", repos: join(tmp, "r3"), goal: "g", mode: "per-repo", color: "green" });
-l = await u.shows("second-one with r3", (x) => titles(x, "second-one") === "r3" && x.tabs.join() === "demo,second-one", 30000);
+l = await u.shows("second-one with r3, in front (nobody moved meanwhile)", (x) => titles(x, "second-one") === "r3" && x.tabs.join() === "demo,second-one" && x.current === "second-one", 30000);
 const cur = l.current;
 u.send({ op: "focus", id: l.terminals.find((t: any) => t.tab === cur).id });
 await key("Ctrl+Tab");
@@ -728,6 +728,27 @@ await u.shows("third undeleted", (x) => x.nodes.some((n: any) => n.id === "p:thi
   u.act("project.add", { node: "p:sixth" });
   await u.answer({ spec: origin("up6") });
   await startMidClone("sixth", "up6");
+  // what the user started and then left (a new project still cloning) does not take the
+  // keyboard back when it is ready
+  writeFileSync(join(tmp, "hold-clones"), "");
+  u.send({ op: "tab", tab: "demo", focus: true });
+  await u.shows("demo in front", (x) => x.current === "demo");
+  u.act("app.new");
+  await u.answer({ name: "eighth", repos: origin("up8"), mode: "per-repo", color: "green" });
+  await u.shows("eighth in the list, cloning", (x) => !!node(x, "p:eighth"), 20000);
+  const before = (await u.list()).terminals.find((t: any) => t.active)?.id;
+  await key("Ctrl+Shift+Tab"); // the user moves on, with the keyboard
+  const moved = (await u.shows("the user on another pane", (x) => !!x.terminals.find((t: any) => t.active) && x.terminals.find((t: any) => t.active).id !== before)).terminals.find((t: any) => t.active).id;
+  rmSync(join(tmp, "hold-clones"));
+  await u.shows("eighth up, its tab there", (x) => x.tabs.includes("eighth") && /^up8/.test(titles(x, "eighth")), 30000);
+  await Bun.sleep(1500);
+  {
+    const l = await u.list();
+    const now = l.terminals.find((t: any) => t.active)?.id;
+    if (l.current === "eighth" || now !== moved) fail("a project ready after the user moved on should not take the keyboard", { current: l.current, now, moved });
+  }
+  u.act("project.delete", { node: "p:eighth" });
+  await u.shows("eighth deleted", (x) => !x.nodes.some((y: any) => y.id === "p:eighth"));
   // a repos line it cannot read is refused before the project is made, not after
   u.act("app.new");
   await u.answer({ name: "seventh", repos: "--branch dev up7", mode: "per-repo", color: "green" });

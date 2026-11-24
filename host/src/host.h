@@ -322,7 +322,12 @@ private:
   QList<QJsonObject> history_;
   int historyAt_ = -1;
   bool navigating_ = false; // walking it: the moves are not new places
-  bool leaving_ = false;    // the keyboard on its way elsewhere: what that undoes is not the old place's view
+  bool leaving_ = false;
+  // moves of the keyboard or the tab in front not asked for by a client: the user's; a client's
+  // focus asked with ifFocus happens only while this is what it was then
+  int focusSerial_ = 0;
+  bool applyingOp_ = false;
+  bool mayFocus(const QJsonObject& m) const { return m.value("focus").toBool(true) && (!m.contains("ifFocus") || m.value("ifFocus").toInt() == focusSerial_); }    // the keyboard on its way elsewhere: what that undoes is not the old place's view
   QJsonObject viewSnapshot();
   bool applyView(const QJsonObject& v);
   QString termByKey(const QString& key) const;

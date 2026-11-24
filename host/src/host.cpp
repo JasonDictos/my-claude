@@ -493,6 +493,7 @@ Host::Host(const QString& socketPath, const QString& driverCmd, QWidget* parent)
     }
   });
   connect(tabs_, &QTabWidget::currentChanged, this, [this](int i) {
+    if (!applyingOp_) ++focusSerial_;
     QTimer::singleShot(0, this, [this] { updateToolbar(); });
     layoutDocks(); // (and the tab in front is kept)
     if (i < 0) { setWindowTitle(remote_.isEmpty() ? QString("my-claude") : "my-claude @ " + remote_); return; }
@@ -867,7 +868,9 @@ void Host::reply(QLocalSocket* to, const QJsonObject& msg) {
   to->flush(); // events must not wait for the loop: a crash right after would lose them
 }
 
-void Host::emitEvent(const QJsonObject& ev) {
+void Host::emitEvent(const QJsonObject& given) {
+  QJsonObject ev = given;
+  ev["focusSerial"] = focusSerial_; // what a client starts now may take the keyboard later only if this is unchanged
   // What the user does while the driver is away (it is restarting) is kept for it: a
   // click must not vanish because it landed in that half second.
   static const QSet<QString> user{"action", "activate", "select", "tab-close", "settings", "settings-open", "nudge", "rename", "open-path"};
@@ -889,6 +892,7 @@ void Host::emitEvent(const QJsonObject& ev) {
 }
 
 void Host::handle(const QJsonObject& m, QLocalSocket* from) {
+  const QScopedValueRollback<bool> client(applyingOp_, true);
   const QString op = m.value("op").toString();
   const QString id = m.value("id").toString();
   const auto noTerm = [&] { reply(from, {{"ev", "error"}, {"error", "no terminal " + id}}); };
@@ -909,7 +913,7 @@ void Host::handle(const QJsonObject& m, QLocalSocket* from) {
   }
   if (op == "open") { open(m); return; }
   if (op == "close") { closeTerm(id, false); return; }
-  if (op == "focus") { focusTerm(id); return; }
+  if (op == "focus") { if (mayFocus(m)) focusTerm(id); return; }
   if (op == "connect") { // another machine's projects in this window
     const QString tag = m.value("machine").toString();
     if (tag.isEmpty() || tag.contains('/') || tag.contains('|')) { reply(from, {{"ev", "error"}, {"error", "bad machine name"}}); return; }
@@ -1041,7 +1045,7 @@ void Host::handle(const QJsonObject& m, QLocalSocket* from) {
       for (const QString& tid : t->order) if (terms_.contains(tid)) { applyTheme(terms_[tid]); paintHeader(terms_[tid]); }
     }
     paintTab(*t);
-    if (m.value("focus").toBool()) { tabs_->setCurrentWidget(t->page); focusCurrent(); }
+    if (m.value("focus").toBool() && mayFocus(m)) { tabs_->setCurrentWidget(t->page); focusCurrent(); }
     return;
   }
   if (op == "tabs") {
@@ -1447,7 +1451,7 @@ void Host::open(const QJsonObject& m) {
   const QString id = m.value("id").toString();
   if (qEnvironmentVariableIsSet("MC_TERM_DEBUG")) fprintf(stderr, "open %s %s\n", qPrintable(id), QJsonDocument(m.value("tmux").toObject()).toJson(QJsonDocument::Compact).constData());
   if (id.isEmpty()) return;
-  if (terms_.contains(id)) { if (m.value("focus").toBool()) focusTerm(id); return; }
+  if (terms_.contains(id)) { if (m.value("focus").toBool() && mayFocus(m)) focusTerm(id); return; }
   // Two kinds. "tmux": a pane of a tmux session, shown natively (tmuxctl.h). "argv": a
   // program run here, on a pty of its own.
   const QJsonObject tm = m.value("tmux").toObject();
@@ -1610,7 +1614,7 @@ void Host::open(const QJsonObject& m) {
   else w->startShellProgram();
   restoreTerm(id);
   emitEvent({{"ev", "opened"}, {"id", id}, {"tab", t.tab}});
-  if (m.value("focus").toBool()) focusTerm(id);
+  if (m.value("focus").toBool() && mayFocus(m)) focusTerm(id);
 }
 
 // ---- tmux panes shown natively -------------------------------------------------------
@@ -2358,6 +2362,7 @@ void Host::setActive(const QString& id) {
   if (activeId_ == id) return;
   const QString old = activeId_;
   activeId_ = id;
+  if (!applyingOp_) ++focusSerial_;
   noteFocus();
   if (terms_.contains(old)) paintHeader(terms_[old]);
   paintHeader(terms_[id]);
