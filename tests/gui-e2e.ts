@@ -149,6 +149,11 @@ if (r1.node !== "r:demo/r1") fail("pane should point at its sidebar entry", r1);
   await u.shows("r1's folder opened", (x) => x.opened === `file://${r1path}`);
   u.act("project.files", { node: "p:demo" });
   await u.shows("the project's folder opened", (x) => x.opened === `file://${join(root, "projects", "demo")}`);
+  // Copy path: the same folders, onto the clipboard (to cd there from a console)
+  u.act("peer.copypath", { node: "r:demo/r1" });
+  await u.shows("r1's path copied", (x) => x.clipboard === r1path);
+  u.act("project.copypath", { node: "p:demo" });
+  await u.shows("the project's path copied", (x) => x.clipboard === join(root, "projects", "demo"));
   // in the list its key is Ctrl+F; a bare f is the list's type-to-find
   u.send({ op: "focus", id: r1.id });
   await u.shows("r1 with the keyboard", (x) => x.terminals.find((t: any) => t.id === r1.id)?.active === true);
@@ -293,6 +298,26 @@ run("host.console-pin");
 await u.shows("unpinned", (x) => dock(x).pinned === false);
 u.send({ op: "focus", id: c1.id });
 await u.shows("console1 with the keyboard", (x) => dock(x).visible && conOf(x, "console1")?.active === true);
+// paths in a pane: underlined under the mouse, Ctrl+click opens one from the pane's folder
+{
+  const plan = join(process.env.HOME!, "docs/plan.md");
+  mkdirSync(dirname(plan), { recursive: true }); writeFileSync(plan, "# plan\n");
+  u.send({ op: "send", id: c1.id, text: "clear; echo 'see docs/plan.md, docs/nope.md or https://example.com/x'\r" });
+  let row = -1, scr = "";
+  for (let i = 0; i < 60 && row < 0; i++) { scr = await screenOf(c1.id); row = scr.split("\n").findIndex((l) => l.startsWith("see docs/plan.md")); if (row < 0) await Bun.sleep(100); }
+  if (row < 0) fail("the paths should be on console1's screen", scr);
+  const line = scr.split("\n")[row];
+  const mouse = async (col: number, click = false) => { u.send({ op: "mouse", id: c1.id, row, col, click }); return u.until("moused"); };
+  let mo = await mouse(line.indexOf("plan.md"));
+  if (mo.mark !== "docs/plan.md") fail("a path under the mouse should be underlined", mo);
+  mo = await mouse(line.indexOf("example.com"));
+  if (!mo.hotspot || mo.mark) fail("over a URL: the terminal's own link at that very cell, no path", mo);
+  await mouse(line.indexOf("plan.md"), true);
+  await u.shows("Ctrl+click opened docs/plan.md from console1's folder", (x) => x.opened === `file://${plan}`);
+  await mouse(line.indexOf("nope.md"), true);
+  await Bun.sleep(500);
+  if ((await u.list()).opened !== `file://${plan}`) fail("a path that is not there opens nothing");
+}
 // show/hide: off the view, the consoles live on; back without a new one
 run("host.consoles");
 await u.shows("the panel off demo", (x) => dock(x).visible === false && dock(x).count === 2);
@@ -487,6 +512,97 @@ await Bun.sleep(300);
 if (dock(await u.list()).visible) fail("an unpinned panel the keyboard left should be gone from demo too");
 u.send({ op: "send", id: con1, text: "exit\r" });
 await u.shows("no consoles", (x) => !dock(x) || dock(x).count === 0);
+// a plan over an agent's pane: shown over its tab only; a question comes back with the selection
+u.send({ op: "tab", tab: "demo", focus: true });
+u.send({ op: "plan", id: r1.id, tab: "demo", path: "docs/plan.md", agent: "r1", text: "# Plan\n\n## Task 3\n\n- One **reactor** per disk\n" });
+await u.shows("the plan over demo", (x) => x.plans?.some((p: any) => p.id === r1.id && p.visible && p.text.includes("One reactor per disk")));
+u.send({ op: "plan-select", id: r1.id, text: "reactor per disk" });
+for (const c of "why?") await key(c);
+await key("Return");
+{
+  const ask = await u.until("plan-ask");
+  if (ask.id !== r1.id || ask.selection !== "reactor per disk" || ask.question !== "why?" || ask.path !== "docs/plan.md") fail("the question should come back with the selection", ask);
+}
+u.send({ op: "plan", id: r1.id, tab: "demo", path: "docs/plan.md", agent: "r1", text: "# Plan\n\n- Two reactors\n" });
+await u.shows("the plan updated in place", (x) => x.plans?.length === 1 && x.plans[0].text.includes("Two reactors"));
+u.send({ op: "tab", tab: "second-one", focus: true });
+await u.shows("not over another project", (x) => x.current === "second-one" && !x.plans[0].visible);
+u.send({ op: "tab", tab: "demo", focus: true });
+await u.shows("back over demo", (x) => x.current === "demo" && x.plans[0].visible);
+u.send({ op: "plan-close", id: r1.id });
+await u.shows("closed", (x) => !x.plans?.length);
+// review end to end: asked for from inside r1, a question lands in r1's pane, an edit reloads
+{
+  const plan = join(tmp, "r1/docs/plan.md");
+  mkdirSync(dirname(plan), { recursive: true }); writeFileSync(plan, "# Plan\n\n## Task 3\n\n- One **reactor** per disk\n");
+  const review = (p: string) => Bun.spawnSync(["bun", join(root, "src/cli.ts"), "review", p], { cwd: join(tmp, "r1"), env: { ...process.env, MY_CLAUDE_PROJECT: "demo", MY_CLAUDE_PEER: "r1" } });
+  const waitScreen = async (id: string, has: string, what: string) => {
+    for (let i = 0; i < 100; i++) { if ((await screenOf(id)).includes(has)) return; await Bun.sleep(100); }
+    fail(what, await screenOf(id));
+  };
+  u.send({ op: "tab", tab: "second-one", focus: true });
+  await u.shows("second-one in front", (x) => x.current === "second-one");
+  review("docs/plan.md");
+  await u.shows("the plan over r1, demo brought to the front", (x) => x.current === "demo" && x.plans?.some((p: any) => p.id === r1.id && p.path === "docs/plan.md" && p.visible), 20000);
+  u.send({ op: "plan-select", id: r1.id, text: "reactor per disk" });
+  for (const c of "why?") await key(c);
+  await key("Return");
+  await waitScreen(r1.id, "[review] docs/plan.md:5", "the question should land in r1's pane, with the line");
+  writeFileSync(plan, "# Plan\n\n- Two reactors\n");
+  await u.shows("the agent's edit shown", (x) => x.plans?.[0]?.text.includes("Two reactors"), 20000);
+  mkdirSync(join(tmp, "r1/docs2"), { recursive: true }); writeFileSync(join(tmp, "r1/docs2/other.md"), "# Other\n");
+  review("docs2/other.md");
+  await u.shows("a second plan replaces the first", (x) => x.plans?.length === 1 && x.plans[0].path === "docs2/other.md", 20000);
+  u.send({ op: "plan-close", id: r1.id });
+  await u.shows("closed", (x) => !x.plans?.length);
+  // a request for a path the driver cannot read (another filesystem): no panel, the request used up
+  mkdirSync(join(root, "projects/demo/.review"), { recursive: true });
+  writeFileSync(join(root, "projects/demo/.review/r1"), join(tmp, "r1/not-here.md"));
+  for (let i = 0; i < 60 && existsSync(join(root, "projects/demo/.review/r1")); i++) await Bun.sleep(100);
+  await Bun.sleep(300);
+  if (existsSync(join(root, "projects/demo/.review/r1")) || (await u.list()).plans?.length) fail("an unreadable plan should be said, not shown or left waiting");
+  // Ctrl+click on a .md path in r1's pane: the plan panel, not the desktop app
+  const before = (await u.list()).opened;
+  u.send({ op: "send", id: r1.id, text: " docs/plan.md" });
+  let row = -1, col = -1, scr = "";
+  for (let i = 0; i < 60 && row < 0; i++) {
+    scr = await screenOf(r1.id);
+    const lines = scr.split("\n");
+    for (let k = lines.length - 1; k >= 0 && row < 0; k--) if (lines[k].endsWith(" docs/plan.md")) { row = k; col = lines[k].lastIndexOf("plan.md"); }
+    if (row < 0) await Bun.sleep(100);
+  }
+  if (row < 0) fail("docs/plan.md should be on r1's screen", scr);
+  u.send({ op: "mouse", id: r1.id, row, col, click: true });
+  await u.until("moused");
+  await u.shows("Ctrl+click on a plan opened its panel", (x) => x.plans?.some((p: any) => p.id === r1.id && p.path === "docs/plan.md"), 20000);
+  if ((await u.list()).opened !== before) fail("a .md in an agent's pane should open in the panel, not the desktop app");
+  u.send({ op: "plan-close", id: r1.id });
+  await u.shows("closed again", (x) => !x.plans?.length);
+}
+// focus history, as a browser's: every place the keyboard went, with the view as it was left
+// there; the mouse's back and forward buttons walk it
+{
+  const button = async (b: string) => { u.send({ op: "button", button: b }); await u.until("buttoned"); };
+  u.send({ op: "tab", tab: "demo", focus: true });
+  u.send({ op: "focus", id: r1.id });
+  await u.shows("r1 with the keyboard", (x) => x.current === "demo" && term(x, r1.id)?.active === true);
+  u.send({ op: "zoom", id: r1.id, on: true });
+  await u.shows("r1 zoomed", (x) => term(x, r1.id)?.zoomed === true);
+  const r2id = (await u.list()).terminals.find((t: any) => t.tab === "demo" && t.id !== r1.id).id;
+  u.send({ op: "focus", id: r2id });
+  await u.shows("r2 with the keyboard", (x) => term(x, r2id)?.active === true && term(x, r1.id)?.zoomed === false);
+  u.send({ op: "tab", tab: "second-one", focus: true });
+  await u.shows("second-one", (x) => x.current === "second-one");
+  await button("back");
+  await u.shows("back: r2, on demo", (x) => x.current === "demo" && term(x, r2id)?.active === true);
+  await button("back");
+  await u.shows("back: r1, zoomed as it was left", (x) => term(x, r1.id)?.active === true && term(x, r1.id)?.zoomed === true);
+  await button("forward");
+  await u.shows("forward: r2, r1 no longer zoomed", (x) => term(x, r2id)?.active === true && term(x, r1.id)?.zoomed === false);
+  await button("forward");
+  await u.shows("forward: second-one", (x) => x.current === "second-one");
+  u.send({ op: "tab", tab: "demo", focus: true });
+}
 // --- more panes than fit: a shell on demo's second screen is still on screen on coming back
 u.send({ op: "look", perGroup: 2 });
 u.send({ op: "focus", id: l.terminals.find((t: any) => t.tab === "demo" && t.title === "r1").id });
@@ -811,6 +927,10 @@ await host!.exited;
   u = await client();
   await u.shows("as it was: r2 zoomed, the consoles over demo, the keyboard in the console",
     (x) => x.current === "demo" && term(x, r2.id)?.zoomed === true && dock(x)?.visible === true && term(x, con.id)?.active === true, 20000);
+  // the focus history came back with it: back is r2, zoomed as it was left
+  u.send({ op: "button", button: "back" });
+  await u.until("buttoned");
+  await u.shows("back after a restart: r2, zoomed", (x) => term(x, r2.id)?.active === true && term(x, r2.id)?.zoomed === true);
   u.send({ op: "send", id: con.id, text: "exit\r" });
   await u.shows("no consoles", (x) => !dock(x) || dock(x).count === 0);
   // Last: offscreen, a window shown again does not come back active.

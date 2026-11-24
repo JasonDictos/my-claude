@@ -4,10 +4,12 @@
 // true to the projects and does what it asks. It owns no session, so a crash here costs nothing.
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, symlinkSync, writeFileSync, rmSync } from "node:fs";
 import { homedir, hostname } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
+import { readFile, stat } from "node:fs/promises";
 import * as core from "./core.ts";
 import * as tmux from "./tmux.ts";
 import * as consoles from "./consoles.ts";
+import * as review from "./review.ts";
 import { attention, attentionMark, clearAttention, type Attention } from "./attention.ts";
 import { COLOR_CHOICES, PALETTE } from "./colors.ts";
 import { defaultSocket, hostAlive, hostLink, hostSend, type HostLink } from "./host.ts";
@@ -333,6 +335,8 @@ class Driver {
   private pendingTab: string | null = null;
   // projects being set up (undelete cloning their repos): greyed, their repos animated until done
   private settingUp = new Set<string>();
+  // plans shown over an agent's pane, by its term id: the file, and when it was last sent
+  private plans = new Map<string, { name: string; repo: string; path: string; mtime: number }>();
   private asks = new Map<string, (v: Dict | null) => void>();
   private askSeq = 0;
   private lists: ((l: Dict) => void)[] = [];
@@ -530,6 +534,7 @@ class Driver {
       { id: "host.settings", label: "Settings", icon: "settings" }] });
     this.sendIfChanged("settings", { op: "settings", ...this.settingsSpec() });
     this.sendIfChanged("placeholder", { op: "placeholder", text: snaps.length ? "No project open.\n\nPick one in the Projects list (Enter or a double-click starts it),\nor my-claude → New project." : "No projects yet.\n\nmy-claude → New project  (or press n in the Projects list)" });
+    await this.reviewLook(snaps);
     this.alerts(snaps);
 
     if (this.pendingTab && this.shown.has(this.pendingTab)) {
@@ -696,7 +701,7 @@ class Driver {
       ? [act("project.open", "Show", "", true), act("project.hide", "Close its tab", "h", this.shown.has(name)), sep,
          act("project.add", "Add repos…", "a"), act("project.chat", "Chat with the peers", "c"), act("project.brief", "Brief the peers again", "b", !!p.lead)]
       : [act("project.open", "Start", "u", p.peers.length > 0), sep, act("project.add", "Add repos…", "a")];
-    actions.push(act("project.files", "Open folder", "f"), act("project.ticket", "Ticket…", "t"), act("project.goal", "Goal…", "g"), act("project.color", "Color…"),
+    actions.push(act("project.files", "Open folder", "f"), act("project.copypath", "Copy path", "C"), act("project.ticket", "Ticket…", "t"), act("project.goal", "Goal…", "g"), act("project.color", "Color…"),
       act("project.readd", "Re-add a removed repo…", "U", (p.removed ?? []).length > 0), sep);
     if (s.up) actions.push(act("project.down", "Bring down…", "d"));
     actions.push(act("project.rename", "Rename… (F2)"), act("project.delete", "Delete project…", "x"));
@@ -711,7 +716,7 @@ class Driver {
       const pa: Dict[] = [act("peer.focus", peer.pane ? "Go to its pane" : "Start", "", s.up || p.peers.length > 0), sep,
         act("peer.shell", "Shell in its environment", "h", !!peer.pane), act("peer.hostshell", "Host shell in its checkout", "H", s.up),
         act("peer.restart", "Relaunch…", "R", s.up && peer.state !== "occupied"), act("peer.index", "Rebuild symbol index", "i"), sep,
-        act("peer.files", "Open folder", "f"), act("peer.lead", peer.repo === p.lead ? "Change the goal…" : "Make lead…", "l"), act("peer.model", "Model…", "m")];
+        act("peer.files", "Open folder", "f"), act("peer.copypath", "Copy path", "C"), act("peer.lead", peer.repo === p.lead ? "Change the goal…" : "Make lead…", "l"), act("peer.model", "Model…", "m")];
       if (peer.state === "occupied") pa.push(act("peer.takeover", "Take over (stop the session holding it)…"));
       pa.push(sep, act("peer.rename", "Rename… (F2)"), act("peer.remove", "Close…", "x"));
       const cloning = settingUp && !existsSync(peer.path);
@@ -778,6 +783,7 @@ class Driver {
         item("host.quit", "Quit", ["Ctrl+Shift+Q"])] },
       { title: "&Project", items: [
         item("host.tab-next", "Next project", ["Ctrl+Tab"]), item("host.tab-prev", "Previous project"),
+        item("host.back", "Back (the mouse's back button)"), item("host.forward", "Forward (the mouse's forward button)"),
         item("host.sidebar", "Project list", ["Ctrl+`", "Ctrl+Shift+D"]), sep,
         item("project.add", "Add repos…"), item("pane.chat", "Chat with the peers", ["Meta+C"]),
         item("project.ticket", "Ticket…"), item("project.goal", "Goal…"), sep,
@@ -986,6 +992,9 @@ class Driver {
         if (String(ev.id ?? "").startsWith(`${consoles.TAB}/`)) void this.consoleRename(String(ev.id).slice(consoles.TAB.length + 1), String(ev.name ?? "")).catch((e) => this.fail(e, "rename"));
         else void this.onRename(String(ev.node ?? ""), String(ev.name ?? "")).catch((e) => this.fail(e, "rename"));
         break;
+      case "plan-ask": void this.planAsk(String(ev.id ?? ""), String(ev.selection ?? ""), String(ev.question ?? "")).catch((e) => this.fail(e, "review")); break;
+      case "plan-closed": this.plans.delete(String(ev.id ?? "")); break;
+      case "open-path": void this.openPath(String(ev.id ?? ""), String(ev.path ?? "")).catch((e) => this.fail(e, "open")); break;
       case "settings": try { this.saveSettings(ev.values ?? {}); } catch (e) { this.fail(e, "settings"); } break;
       case "settings-open": this.send({ op: "settings", ...this.settingsSpec(), open: true }); break;
       case "quit": log("window closed"); this.flushPrefs(); this.releaseAll(); process.exit(0);
@@ -1070,6 +1079,58 @@ class Driver {
     this.show(name);
   }
 
+  // A path Ctrl+clicked in a pane: from the pane's folder, else its repo's, opened on the desktop.
+  private async openPath(id: string, raw: string): Promise<void> {
+    const [name, pane] = split2(id);
+    const path = raw.replace(/:\d+(:\d+)?$/, "").replace(/^~(?=\/)/, homedir());
+    const here = (await sh("tmux", ["display-message", "-p", "-t", pane, "#{pane_current_path}"], { ok: true })).trim();
+    const repo = this.snap(name)?.peers.find((x) => x.repo === this.byPane(name, pane).repo)?.path;
+    for (const dir of [here, repo].filter((d): d is string => !!d)) {
+      const abs = resolve(dir, path);
+      if (!(await stat(abs).then(() => true, () => false))) continue;
+      // a plan in an agent's pane opens over it, to ask about; anything else in its desktop app
+      const agent = this.byPane(name, pane).repo;
+      if (/\.md$/i.test(abs) && agent && this.snap(name)?.peers.some((x) => x.repo === agent)) return this.openPlan(name, agent, abs);
+      this.send({ op: "browse", path: abs });
+      return;
+    }
+    this.notify(`no ${path} in ${tilde(here || homedir())}`, { error: true });
+  }
+
+  // ---- plan review: an agent's plan over its pane, the user's questions into its prompt
+
+  // Requests agents left (my-claude review), and the open plans they have changed since.
+  private async reviewLook(snaps: core.ProjectSnap[]): Promise<void> {
+    for (const s of snaps) for (const r of await review.takeReviewRequests(s.project.name)) await this.openPlan(s.project.name, r.repo, r.path);
+    for (const pl of [...this.plans.values()]) {
+      const mtime = await stat(pl.path).then((x) => x.mtimeMs, () => 0);
+      if (mtime && mtime !== pl.mtime) await this.openPlan(pl.name, pl.repo, pl.path, false);
+    }
+  }
+
+  // Over the agent's pane, its project in front (not for a reload); a second plan replaces it.
+  private async openPlan(name: string, repo: string, abs: string, front = true): Promise<void> {
+    const peer = this.snap(name)?.peers.find((x) => x.repo === repo);
+    if (!peer?.pane) return this.notify(`${repo} is not running: no pane to show its plan over`, { error: true });
+    const [text, st] = await Promise.all([readFile(abs, "utf8").catch(() => null), stat(abs).catch(() => null)]);
+    if (text === null || !st) return this.notify(`no ${abs} here (${repo}'s plan is in its own filesystem?)`, { error: true });
+    const id = `${name}/${peer.pane}`;
+    this.plans.set(id, { name, repo, path: abs, mtime: st.mtimeMs });
+    this.send({ op: "plan", id, tab: name, path: this.planPath(peer.path, abs), agent: repo, text });
+    if (front) this.show(name);
+  }
+  private planPath = (repo: string, abs: string) => { const r = relative(repo, abs); return r.startsWith("..") ? abs : r; };
+
+  // The user's question about a passage: typed into the agent's prompt, quoting it, with its lines.
+  private async planAsk(id: string, selection: string, question: string): Promise<void> {
+    const pl = this.plans.get(id);
+    const peer = pl && this.snap(pl.name)?.peers.find((x) => x.repo === pl.repo);
+    if (!pl || !peer) return;
+    const source = await readFile(pl.path, "utf8").catch(() => "");
+    const lines = selection ? review.selectionLines(source, selection) : null;
+    await tmux.paste(split2(id)[1], review.reviewMessage(this.planPath(peer.path, pl.path), lines, selection, question));
+  }
+
   // A name typed over an entry (F2): its display name, the default again when emptied.
   private async onRename(node: string, raw: string): Promise<void> {
     const label = raw.trim().slice(0, 64);
@@ -1131,6 +1192,8 @@ class Driver {
       case "project.goal": return this.projectGoal(project());
       // the window opens it: it knows which machine the folder is on
       case "project.files": return this.send({ op: "browse", path: join(PROJECTS, project()) });
+      case "project.copypath": return this.send({ op: "copy", text: join(PROJECTS, project()) });
+      case "peer.copypath": { const repo = peer(); const at = this.snap(name)?.peers.find((x) => x.repo === repo)?.path; if (at) this.send({ op: "copy", text: at }); return; }
       case "peer.files": { const repo = peer(); const at = this.snap(name)?.peers.find((x) => x.repo === repo)?.path; if (at) this.send({ op: "browse", path: at }); return; }
       case "project.color": return this.projectColor(project());
       case "project.readd": return this.projectReadd(project());

@@ -65,6 +65,22 @@ export async function ensureBinary(): Promise<string | null> {
   return code === 0 ? `rebuilt ${bin}` : `dist/my-claude build failed: ${err.trim().split("\n").pop()}`;
 }
 
+// my-claude's skills where Claude Code looks for the user's: links into the checkout, so they follow
+// it. A real directory of that name there is the user's own, left alone.
+export function installSkills(): string[] {
+  const from = join(ROOT, "skills");
+  const into = join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), "skills");
+  mkdirSync(into, { recursive: true });
+  return readdirSync(from, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => {
+    const at = join(into, d.name), to = join(from, d.name);
+    const st = lstatSync(at, { throwIfNoEntry: false });
+    if (st && !st.isSymbolicLink()) return `${at}: a directory of yours is there, left alone`;
+    if (st) unlinkSync(at);
+    symlinkSync(to, at);
+    return `${at} -> ${to}`;
+  });
+}
+
 export function newProject(name: string, o: { goal?: string; shared?: boolean; profile?: string; color?: string; ticket?: string } = {}): Project {
   if (!NAME_RE.test(name)) die(`bad project name '${name}'`);
   if (exists(name)) die(`project '${name}' exists`);
@@ -981,6 +997,7 @@ export function projectBrief(p: Project, peer: Peer): string {
     p.ticket ? `Ticket: ${p.ticket}. The project exists for it; reference it in branches, commits and PRs the way the repo's conventions want.` : "",
     p.by ? `This project was started by the Claude session ${p.by} on the user's behalf; it is a claude-peers peer, report results back to it as well as to the user.` : "",
     `Everyone is in the claude-peers group "${GROUP(p.name)}": message the group to reach all of them, or one peer by its path (paths are unambiguous; a repo name can carry a suffix like -2 when the same repo is open in another project). When your work touches another repo, or you need something from it, talk to that session instead of guessing or editing it yourself; tell the group when you change an interface others build against. "Work with your peers" means exactly this. The roster above is from your launch; the my-claude MCP tool project_status gives the current one.`,
+    "When you hand the user a plan or spec you wrote, run `\"$MY_CLAUDE_ROOT/bin/my-claude\" review <path>` (the review-plan skill does the same): it opens over your pane, the user highlights a passage and asks, and the question reaches you as a \"[review] <path>:<lines>\" block quoting it. Answer about exactly those lines; edit the plan only when the user agrees.",
     `Need more hands or a separate line of work (a new idea, a change in other repos, anything that should outlive this conversation)? Do not spawn subagents for it: call the my-claude MCP tool start_project with the repos and a written work order. That gives it durable sessions the user sees and can talk to in the side panel. add_repos brings another repo into a project as a peer of its own (into this one too, when the user asks, e.g. add_repos with project "${p.name}" and repos ["concourse-pipelines"]). Repos are given as a path, a bare name (cloned from the default org), org/repo, or a git or PR URL; anything not on disk is cloned fresh. list_projects and project_status show what exists.`,
     `The user can join the group as the claude-peers peer "${CHAT_NAME()}" (a chat pane, prefix+c). A message from that name is from the user, in person: treat it as you would a prompt. Answer in the group so the user and every peer see it, and keep it to the point; the user reads it in a small pane.`,
     `The project is the tmux session "${tmux.sess(p.name)}", one pane per session titled with its repo name (yours: "${peer.repo}"), spread over its windows when there are many; a shell the user opened beside a peer is titled "shell:<repo>" (in that peer's environment) or "host:<repo>" (on the host), the user's chat pane "chat:${p.name}", and "${tmux.PANEL_TITLE}" is the project list. You can read any pane, e.g. when asked what another peer or a build shell is showing: find it with \`tmux list-panes -s -t ${tmux.sess(p.name)} -F '#{pane_id} #{pane_title}'\`, then \`tmux capture-pane -p -J -S -200 -t <pane_id>\` (reading only; do not type into another pane).`,

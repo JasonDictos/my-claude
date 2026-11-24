@@ -12,7 +12,7 @@ tmp=$(mktemp -d); trap 'tmux kill-server 2>/dev/null || true; rm -rf "$tmp"' EXI
 export TMUX_TMPDIR=$tmp; unset TMUX
 export MY_CLAUDE_ROOT=$tmp/root MY_CLAUDE_CLAUDE=$here/fake-claude FAKE_CLAUDE_LOG=$tmp/claude.log HOME=$tmp/home
 mkdir -p "$MY_CLAUDE_ROOT" "$HOME" "$tmp/r1" "$tmp/r2" "$tmp/r3" "$tmp/r4" "$tmp/r5" "$tmp/r6" "$tmp/r7"
-ln -s "$here/../src" "$MY_CLAUDE_ROOT/src"; ln -s "$here/../bin" "$MY_CLAUDE_ROOT/bin"; ln -s "$here/../node_modules" "$MY_CLAUDE_ROOT/node_modules"
+ln -s "$here/../src" "$MY_CLAUDE_ROOT/src"; ln -s "$here/../bin" "$MY_CLAUDE_ROOT/bin"; ln -s "$here/../node_modules" "$MY_CLAUDE_ROOT/node_modules"; ln -s "$here/../skills" "$MY_CLAUDE_ROOT/skills"
 echo '{"profile":"host","peers":{"cli":"/nonexistent/claude-peers-cli"}}' > "$MY_CLAUDE_ROOT/config.json"
 mc() { bun "$MY_CLAUDE_ROOT/src/cli.ts" "$@"; }
 fail() { echo "FAIL: $*" >&2; exit 1; }
@@ -67,6 +67,13 @@ wait_log 4
 [ "$(panel)" = "my-claude-panel 0 30" ] || fail "side panel missing or not a 30-col left column: $(panel)"
 grep -q -- "--session-id" "$FAKE_CLAUDE_LOG" || fail "first launch should use --session-id"
 grep -q -- "--name smoke/r1" "$FAKE_CLAUDE_LOG" || fail "peer name missing"
+grep -q 'review <path>' "$FAKE_CLAUDE_LOG" || fail "the brief should tell agents about plan review"
+# my-claude's skills, linked (not copied) where Claude looks for the user's
+env -u CLAUDE_CONFIG_DIR bun "$MY_CLAUDE_ROOT/src/cli.ts" install --skills >/dev/null || fail "install --skills"
+for s in review-plan plan-review; do
+  [ -L "$HOME/.claude/skills/$s" ] && [ "$(readlink "$HOME/.claude/skills/$s")" = "$MY_CLAUDE_ROOT/skills/$s" ] || fail "install --skills should link $s"
+done
+env -u CLAUDE_CONFIG_DIR bun "$MY_CLAUDE_ROOT/src/cli.ts" install --skills >/dev/null || fail "install --skills twice"
 st=$(mc ls --json | jq -r '.[0].state'); [[ $st = UP || $st = PARTIAL ]] || fail "ls state after up: '$st'"
 mc ls | grep -q '^smoke ' || fail "ls table"
 mc status smoke | grep -q '^r1 ' || fail "status table"
@@ -97,6 +104,13 @@ grep -q -- "--model opus-5.5" "$FAKE_CLAUDE_LOG" || fail "model not passed"
 
 mc lead smoke r2 "ship it" >/dev/null; [ "$(mc status smoke --json | jq -r '[.lead,.goal,.peers[0].role,.peers[1].role]|join(",")')" = "r2,ship it,peer,lead" ] || fail "lead+goal"
 mc set smoke r3 --model sonnet-5.5 >/dev/null; [ "$(mc status smoke --json | jq -r '.peers[2].model')" = sonnet-5.5 ] || fail "set model"
+# An agent asks the window to show a plan: the request waits in the project's folder.
+mkdir -p "$tmp/r1/docs"; echo "# plan" > "$tmp/r1/docs/plan.md"
+(cd "$tmp/r1" && MY_CLAUDE_PROJECT=smoke MY_CLAUDE_PEER=r1 mc review docs/plan.md >/dev/null) || fail "review should take a plan"
+[ "$(cat "$MY_CLAUDE_ROOT/projects/smoke/.review/r1")" = "$tmp/r1/docs/plan.md" ] || fail "review should leave the plan's path for the window"
+(cd "$tmp/r1" && MY_CLAUDE_PROJECT=smoke MY_CLAUDE_PEER=r1 mc review docs/nope.md >/dev/null 2>&1) && fail "review of a missing file should fail"
+(cd "$tmp/r1" && unset MY_CLAUDE_PROJECT MY_CLAUDE_PEER && mc review docs/plan.md >/dev/null 2>&1) && fail "review outside an agent should fail"
+rm -rf "$MY_CLAUDE_ROOT/projects/smoke/.review"
 
 mc down smoke >/dev/null
 tmux has-session -t mc-smoke 2>/dev/null && fail "session should be gone"

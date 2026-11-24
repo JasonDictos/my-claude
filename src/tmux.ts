@@ -39,6 +39,13 @@ export async function sendLine(pane: string, line: string): Promise<void> {
   await sh("tmux", ["send-keys", "-t", pane, "Enter"]);
 }
 
+// Text into a pane's program as a paste (several lines stay one message), then Enter.
+export async function paste(pane: string, text: string): Promise<void> {
+  await sh("tmux", ["set-buffer", "-b", "mc-review", "--", text]);
+  await sh("tmux", ["paste-buffer", "-p", "-d", "-b", "mc-review", "-t", pane]);
+  await sh("tmux", ["send-keys", "-t", pane, "Enter"]);
+}
+
 export async function paneOf(name: string, repo: string): Promise<string | null> {
   return peerPane(await panes(name), repo)?.id ?? null;
 }
