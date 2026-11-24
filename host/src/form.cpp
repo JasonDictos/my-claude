@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Jason Dictos - my-claude, https://github.com/JasonDictos/my-claude
 #include "form.h"
+#include "colorscrub.h"
 #include "syskeys.h"
 #include <QKeyEvent>
 #include <QMessageBox>
@@ -265,6 +266,21 @@ void FormDialog::addFields(QFormLayout* form, const QJsonObject& schema, const Q
       e->setPlaceholderText(p.value("placeholder").toString(p.value("default").toVariant().toString()));
       if (format == "password") e->setEchoMode(QLineEdit::Password);
       f.widget = e;
+      if (format == "color") { // #rrggbb typed, or a swatch scrubbed with the mouse: live, no picker window
+        row = new QWidget(this);
+        auto* h = new QHBoxLayout(row);
+        h->setContentsMargins(0, 0, 0, 0);
+        h->setSpacing(3);
+        const auto paint = [e](const QString& c) { e->setStyleSheet(QColor::isValidColorName(c) ? "QLineEdit { border-left: 14px solid " + c + "; }" : QString()); };
+        paint(e->text());
+        connect(e, &QLineEdit::textChanged, e, paint);
+        h->addWidget(e, 1);
+        for (const auto& sw : p.value("swatches").toArray()) {
+          auto* s = new ColorScrub(QColor(sw.toString()), row);
+          connect(s, &ColorScrub::scrubbed, e, [e](const QColor& c) { e->setText(c.name()); });
+          h->addWidget(s);
+        }
+      }
       if (format == "path") {
         row = new QWidget(this);
         auto* h = new QHBoxLayout(row);

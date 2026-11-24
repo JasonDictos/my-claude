@@ -18,7 +18,7 @@ import {
 } from "./store.ts";
 export { trashed } from "./store.ts";
 import * as tmux from "./tmux.ts";
-import { PALETTE, projectColor } from "./colors.ts";
+import { PALETTE, projectColor, isColor, colorHelp } from "./colors.ts";
 import { attention, attentionMark, attentionSettings, clearAttention, projectAttention, type Attention } from "./attention.ts";
 import { mcpConfig } from "./mcp.ts";
 
@@ -86,7 +86,7 @@ export function newProject(name: string, o: { goal?: string; shared?: boolean; p
   if (exists(name)) die(`project '${name}' exists`);
   const prof = o.profile ?? defaultProfile();
   profile(prof);
-  if (o.color && !PALETTE[o.color]) die(`no color '${o.color}' (have: ${Object.keys(PALETTE).join(", ")})`);
+  if (o.color && !isColor(o.color)) die(`no color '${o.color}' (${colorHelp})`);
   const p: Project = { name, goal: o.goal ?? "", mode: o.shared ? "shared" : "per-repo", profile: prof, lead: null, color: o.color ?? null, ticket: o.ticket ? ticketKey(o.ticket) : null, peers: [] };
   save(p);
   return p;
@@ -797,7 +797,7 @@ export async function refreshStatus(p: Project): Promise<void> {
 }
 
 export async function setColor(name: string, color: string): Promise<void> {
-  if (!PALETTE[color]) die(`no color '${color}' (have: ${Object.keys(PALETTE).join(", ")})`);
+  if (!isColor(color)) die(`no color '${color}' (${colorHelp})`);
   const p = load(name);
   p.color = color;
   save(p);

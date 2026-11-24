@@ -221,7 +221,9 @@ tests/gui-demo.sh          # try it in a sandbox: temp HOME, fake claude, privat
 ```
 
 - **Tabs are projects.** `Ctrl+Tab` goes to the next one. Each has a colour: a dot on
-  its tab, and a faint tint of it in the background of its terminals.
+  its tab, and a faint tint of it in the background of its terminals. Any colour: type
+  `#rrggbb`, or hold the mouse on one of the swatches in New project / Color… and move it
+  (left/right the hue, up/down lighter or darker, the wheel how vivid), live.
 - **Panes are its repos and agents**, plus the shells and the chat you open. At most
   four are on screen (`gui.panesPerGroup`); a project with more shows them in groups,
   listed under the grid. `Ctrl+Shift+Tab` walks through every pane, group after group.

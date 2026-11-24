@@ -1371,7 +1371,7 @@ class Driver {
       repos: { type: "string", title: "Repos", placeholder: "~/src/api web acme/billing https://github.com/…/pull/12", description: "Paths, repo names, org/repo or URLs (a PR URL clones its branch), space separated. --branch B or --name N after one applies to it. A path is linked in, anything else is cloned fresh." },
       goal: { type: "string", title: "Goal", format: "multiline" },
       mode: { type: "string", title: "Containers", enum: ["per-repo", "shared"], enumLabels: ["one per repo", "one shared"], default: "per-repo" },
-      color: { type: "string", title: "Color", enum: COLOR_CHOICES, default: COLOR_CHOICES[0] } } } });
+      color: { type: "string", title: "Color", format: "color", default: PALETTE[COLOR_CHOICES[0]].ink, swatches: Object.values(PALETTE).map((c) => c.ink) } } } });
     if (!v) return;
     const name = slug(String(v.name ?? ""));
     if (!name) throw new Error("that name has no usable characters (letters, digits, . _ -)");
@@ -1628,7 +1628,7 @@ class Driver {
   }
 
   private async projectColor(name: string): Promise<void> {
-    const v = await this.ask({ title: `Color of ${name}`, ok: "Set", schema: { type: "object", properties: { color: { type: "string", title: "Color", enum: Object.keys(PALETTE) } } }, values: { color: this.snap(name)?.project.color ?? "" } });
+    const v = await this.ask({ title: `Color of ${name}`, ok: "Set", schema: { type: "object", properties: { color: { type: "string", title: "Color", format: "color", swatches: Object.values(PALETTE).map((c) => c.ink) } } }, values: { color: this.snap(name)?.color ?? "" } });
     if (!v?.color) return;
     await this.work(name, "", () => core.setColor(name, String(v.color)));
   }

@@ -12,7 +12,7 @@ import { ROOT, UsageError, die, load, type Role } from "./store.ts";
 import * as review from "./review.ts";
 
 const USAGE = `usage: my-claude [cui] [--remote user@host] <command> [args]   (no command: the menu)
-  new    <project> [--goal TEXT] [--shared] [--profile P] [--color blue|orange|green|purple|red|yellow|teal|pink] [--ticket KEY]
+  new    <project> [--goal TEXT] [--shared] [--profile P] [--color NAME|#rrggbb] [--ticket KEY]
   add    <project> <spec> [<spec>...] [--model M] [--takeover]
          spec: <path> | <repo> | <org>/<repo> | <git url> | <PR url>, each with optional --branch B --name N --port P (repeatable;
          P is PORT, HOST:CONTAINER or IP:HOST:CONTAINER, forwarded into its container)
@@ -28,7 +28,7 @@ const USAGE = `usage: my-claude [cui] [--remote user@host] <command> [args]   (n
   brief  <project>                       resend the briefs
   ticket <project> [KEY|-]               set (or clear) the tracker ticket the project is for; briefed to every peer
   review <path>                          (inside an agent) show the user a plan over your pane, to ask about
-  color  <project> <color>
+  color  <project> <color>              a name (blue, orange, green, purple, red, yellow, teal, pink) or #rrggbb
   set    <project> <repo> [--role peer] [--model M|default] [--session <id or prefix>]
   index  <project> [<repo>]              rebuild the ctags symbol index (automatic at launch)
   restart  <project> <repo>              stop the peer's claude and start it again in the same pane, same conversation

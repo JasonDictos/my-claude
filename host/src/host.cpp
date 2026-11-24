@@ -5,6 +5,7 @@
 #include "layericon.h"
 #include "form.h"
 #include "planpanel.h"
+#include "colorscrub.h"
 #include "theme.h"
 #include "tmuxctl.h"
 #include <QAction>
@@ -1113,6 +1114,27 @@ void Host::handle(const QJsonObject& m, QLocalSocket* from) {
     settingsSchema_ = m.value("schema").toObject();
     settingsValues_ = m.value("values").toObject();
     if (m.value("open").toBool()) openSettings();
+    return;
+  }
+  if (op == "scrub" && qEnvironmentVariableIsSet("MC_TERM_TEST")) { // tests: a colour field's swatch held, moved (dx, dy), the wheel turned meanwhile
+    FormDialog* d = asks_.value(m.value("dialog").toString());
+    QPointer<QLineEdit> field = d ? d->findChild<QLineEdit*>(m.value("key").toString()) : nullptr;
+    const QList<ColorScrub*> sw = d ? d->findChildren<ColorScrub*>() : QList<ColorScrub*>();
+    const int i = m.value("swatch").toInt();
+    if (!field || i < 0 || i >= sw.size()) { reply(from, {{"ev", "error"}, {"error", "no such colour field or swatch"}}); return; }
+    QPointer<QLocalSocket> asker = from;
+    QPointer<ColorScrub> s = sw[i];
+    const QPoint by(m.value("dx").toInt(), m.value("dy").toInt());
+    const int wheel = m.value("wheel").toInt();
+    QTimer::singleShot(0, this, [this, asker, s, field, by, wheel] { // (the mouse runs the event loop: not inside this socket's read)
+      if (!s) return;
+      const QPoint c = s->rect().center(), to = c + by;
+      QTest::mousePress(s, Qt::LeftButton, {}, c);
+      if (to != c) QTest::mouseMove(s, to);
+      if (wheel) { QWheelEvent we(QPointF(to), QPointF(s->mapToGlobal(to)), QPoint(), QPoint(0, 120 * wheel), Qt::LeftButton, Qt::NoModifier, Qt::NoScrollPhase, false); QCoreApplication::sendEvent(s, &we); }
+      QTest::mouseRelease(s, Qt::LeftButton, {}, to);
+      if (asker) reply(asker, {{"ev", "scrubbed"}, {"value", field ? field->text() : QString()}});
+    });
     return;
   }
   if (op == "button" && qEnvironmentVariableIsSet("MC_TERM_TEST")) { // tests: the mouse's back or forward button

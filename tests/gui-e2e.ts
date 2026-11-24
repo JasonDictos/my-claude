@@ -488,6 +488,36 @@ await u.shows("Ctrl+Shift+Tab goes to the project's next pane", (x) => x.current
 await key("Ctrl+Tab");
 await u.shows("Ctrl+Tab comes round to the first project", (x) => x.current === cur);
 if (record("second-one").peers[0].repo !== "r3" || record("second-one").color !== "green") fail("new project record", record("second-one"));
+// any colour, not only the named ones: the field takes #rrggbb, or a swatch scrubbed with the
+// mouse held: left/right turns the hue, up/down goes through that colour's spectrum, the wheel
+// its saturation; the field follows live
+{
+  const hsl = (hex: string) => {
+    const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2, d = mx - mn;
+    const s = d === 0 ? 0 : d / (1 - Math.abs(2 * l - 1));
+    const h = d === 0 ? 0 : mx === r ? 60 * (((g - b) / d) % 6) : mx === g ? 60 * ((b - r) / d + 2) : 60 * ((r - g) / d + 4);
+    return { h: (h + 360) % 360, s, l };
+  };
+  u.act("project.color", { node: "p:second-one" });
+  const dlg = (await u.shows("the colour dialog", (x) => x.asks.length > 0)).asks[0];
+  const scrub = async (o: object) => { u.send({ op: "scrub", dialog: dlg, key: "color", ...o }); return (await u.until("scrubbed")).value as string; };
+  if ((await scrub({ swatch: 2 })) !== "#87d787") fail("a click on a swatch should take its colour (green)");
+  const blue = hsl("#5fafff");
+  let v = await scrub({ swatch: 0, dx: 60 });
+  if (Math.abs((hsl(v).h - blue.h + 360) % 360 - 60) > 4) fail("dragging 60px right should turn the hue 60 degrees", { v, h: hsl(v).h, from: blue.h });
+  v = await scrub({ swatch: 0, dy: -40 });
+  if (!(hsl(v).l > blue.l + 0.1)) fail("dragging up should make it lighter", { v, l: hsl(v).l, from: blue.l });
+  v = await scrub({ swatch: 1, wheel: -3 });
+  if (!(hsl(v).s < hsl("#ff8700").s - 0.1)) fail("the wheel should take saturation off", { v, s: hsl(v).s });
+  const picked = await scrub({ swatch: 4, dx: 20, dy: 10 });
+  u.send({ op: "type", dialog: dlg, text: "", enter: true }); // Enter, as the user would: the field's own value goes
+  await u.until("typed");
+  await u.shows("the colour dialog closed", (x) => !x.asks.includes(dlg));
+  for (let i = 0; i < 50 && record("second-one").color !== picked; i++) await Bun.sleep(100);
+  if (record("second-one").color !== picked) fail("the scrubbed colour should be the project's", { picked, rec: record("second-one").color });
+  await key("Shift"); // (answered by message, not a click on OK: the window takes the keyboard back as a click leaves it)
+}
 // consoles pinned: over every project; unpinned, gone once the keyboard leaves them
 u.send({ op: "tab", tab: "demo", focus: true });
 await u.shows("demo in front", (x) => x.current === "demo");
