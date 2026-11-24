@@ -579,6 +579,30 @@ await u.shows("closed", (x) => !x.plans?.length);
   u.send({ op: "plan-close", id: r1.id });
   await u.shows("closed again", (x) => !x.plans?.length);
 }
+// focus history, as a browser's: every place the keyboard went, with the view as it was left
+// there; the mouse's back and forward buttons walk it
+{
+  const button = async (b: string) => { u.send({ op: "button", button: b }); await u.until("buttoned"); };
+  u.send({ op: "tab", tab: "demo", focus: true });
+  u.send({ op: "focus", id: r1.id });
+  await u.shows("r1 with the keyboard", (x) => x.current === "demo" && term(x, r1.id)?.active === true);
+  u.send({ op: "zoom", id: r1.id, on: true });
+  await u.shows("r1 zoomed", (x) => term(x, r1.id)?.zoomed === true);
+  const r2id = (await u.list()).terminals.find((t: any) => t.tab === "demo" && t.id !== r1.id).id;
+  u.send({ op: "focus", id: r2id });
+  await u.shows("r2 with the keyboard", (x) => term(x, r2id)?.active === true && term(x, r1.id)?.zoomed === false);
+  u.send({ op: "tab", tab: "second-one", focus: true });
+  await u.shows("second-one", (x) => x.current === "second-one");
+  await button("back");
+  await u.shows("back: r2, on demo", (x) => x.current === "demo" && term(x, r2id)?.active === true);
+  await button("back");
+  await u.shows("back: r1, zoomed as it was left", (x) => term(x, r1.id)?.active === true && term(x, r1.id)?.zoomed === true);
+  await button("forward");
+  await u.shows("forward: r2, r1 no longer zoomed", (x) => term(x, r2id)?.active === true && term(x, r1.id)?.zoomed === false);
+  await button("forward");
+  await u.shows("forward: second-one", (x) => x.current === "second-one");
+  u.send({ op: "tab", tab: "demo", focus: true });
+}
 // --- more panes than fit: a shell on demo's second screen is still on screen on coming back
 u.send({ op: "look", perGroup: 2 });
 u.send({ op: "focus", id: l.terminals.find((t: any) => t.tab === "demo" && t.title === "r1").id });
@@ -903,6 +927,10 @@ await host!.exited;
   u = await client();
   await u.shows("as it was: r2 zoomed, the consoles over demo, the keyboard in the console",
     (x) => x.current === "demo" && term(x, r2.id)?.zoomed === true && dock(x)?.visible === true && term(x, con.id)?.active === true, 20000);
+  // the focus history came back with it: back is r2, zoomed as it was left
+  u.send({ op: "button", button: "back" });
+  await u.until("buttoned");
+  await u.shows("back after a restart: r2, zoomed", (x) => term(x, r2.id)?.active === true && term(x, r2.id)?.zoomed === true);
   u.send({ op: "send", id: con.id, text: "exit\r" });
   await u.shows("no consoles", (x) => !dock(x) || dock(x).count === 0);
   // Last: offscreen, a window shown again does not come back active.

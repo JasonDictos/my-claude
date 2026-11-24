@@ -254,6 +254,12 @@ tests/gui-demo.sh          # try it in a sandbox: temp HOME, fake claude, privat
   each console under it: a click goes to it, **F2** renames it.
 - **Paths in panes:** a path under the mouse is underlined; Ctrl+click opens it from the
   pane's folder (or its repo's), in its desktop app; another machine's over sftp.
+- **Back and forward, as in a browser:** every place the keyboard goes (a pane, a console,
+  another project) is a point, with the view as you left it there (zoom, minimised panes,
+  the consoles' panel); the mouse's back and forward buttons walk them, and the stack is
+  kept across a restart.
+- **Copy path** (right-click a project or repo, or Ctrl+Shift+C in the list): its folder on
+  the clipboard, to cd there from a console.
 - **It opens as you left it:** the project in front, the pane with the keyboard, zoomed and
   minimised panes, the consoles' panel (kept in `~/.config/my-claude/mc-term.conf`).
 - **The overview** (`Meta+Shift+W`): every open terminal at once, live; click one to go there.

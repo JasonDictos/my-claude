@@ -318,6 +318,17 @@ private:
   void layoutDocks();
   void showDock(const QString& tab, bool focus);
   void hideDock(const QString& tab);
+  // focus history, as a browser's: every place the keyboard went, with the view as left there
+  QList<QJsonObject> history_;
+  int historyAt_ = -1;
+  bool navigating_ = false; // walking it: the moves are not new places
+  bool leaving_ = false;    // the keyboard on its way elsewhere: what that undoes is not the old place's view
+  QJsonObject viewSnapshot();
+  bool applyView(const QJsonObject& v);
+  QString termByKey(const QString& key) const;
+  void noteFocus();
+  void noteView();
+  void goHistory(int step);
   // plans agents asked the user to read, by the agent's pane id: each over its tab only
   QMap<QString, PlanPanel*> plans_;
   void layoutPlans();

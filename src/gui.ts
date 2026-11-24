@@ -783,6 +783,7 @@ class Driver {
         item("host.quit", "Quit", ["Ctrl+Shift+Q"])] },
       { title: "&Project", items: [
         item("host.tab-next", "Next project", ["Ctrl+Tab"]), item("host.tab-prev", "Previous project"),
+        item("host.back", "Back (the mouse's back button)"), item("host.forward", "Forward (the mouse's forward button)"),
         item("host.sidebar", "Project list", ["Ctrl+`", "Ctrl+Shift+D"]), sep,
         item("project.add", "Add repos…"), item("pane.chat", "Chat with the peers", ["Meta+C"]),
         item("project.ticket", "Ticket…"), item("project.goal", "Goal…"), sep,

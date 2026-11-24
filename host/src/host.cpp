@@ -34,6 +34,7 @@
 #include <QPainter>
 #include <QProcess>
 #include <QRandomGenerator>
+#include <QScopedValueRollback>
 #include <QScrollBar>
 #include <QSettings>
 #include <QSplitter>
@@ -634,6 +635,9 @@ Host::Host(const QString& socketPath, const QString& driverCmd, QWidget* parent)
     toolbar_->setVisible(st.value("toolbar", true).toBool());
     session_ = QJsonDocument::fromJson(st.value("session").toByteArray()).object();
     restoring_ = !session_.isEmpty();
+    const QJsonObject was = session_.value("history").toObject();
+    for (const auto& p : was.value("stack").toArray()) history_ << p.toObject();
+    historyAt_ = qBound(-1, was.value("at").toInt(-1), int(history_.size()) - 1);
     if (!menuPersist_) QTimer::singleShot(0, this, [this] { menuBar()->hide(); });
   }
   // Unlimited scrollback is file-backed, and the files go where TMPDIR says. /tmp is RAM
@@ -1109,6 +1113,16 @@ void Host::handle(const QJsonObject& m, QLocalSocket* from) {
     settingsSchema_ = m.value("schema").toObject();
     settingsValues_ = m.value("values").toObject();
     if (m.value("open").toBool()) openSettings();
+    return;
+  }
+  if (op == "button" && qEnvironmentVariableIsSet("MC_TERM_TEST")) { // tests: the mouse's back or forward button
+    QPointer<QLocalSocket> asker = from;
+    const Qt::MouseButton b = m.value("button").toString() == "forward" ? Qt::ForwardButton : Qt::BackButton;
+    QTimer::singleShot(0, this, [this, asker, b] { // (a click runs the event loop: not inside this socket's read)
+      QWidget* at = QApplication::focusWidget() ? QApplication::focusWidget() : static_cast<QWidget*>(this);
+      QTest::mouseClick(at, b);
+      if (asker) reply(asker, {{"ev", "buttoned"}});
+    });
     return;
   }
   if (op == "plan") { // a plan an agent asked the user to read, over its tab; again: reloaded
@@ -2322,6 +2336,7 @@ void Host::setActive(const QString& id) {
   if (activeId_ == id) return;
   const QString old = activeId_;
   activeId_ = id;
+  noteFocus();
   if (terms_.contains(old)) paintHeader(terms_[old]);
   paintHeader(terms_[id]);
   // the project list marks the pane the keyboard is in
@@ -2333,6 +2348,7 @@ void Host::setActive(const QString& id) {
 
 void Host::focusTerm(const QString& id) {
   if (!terms_.contains(id)) return;
+  const QScopedValueRollback<bool> leave(leaving_, leaving_ || id != activeId_);
   if (isConsoleTab(terms_[id].tab)) { // up over the view in front, on its tab, with the keyboard
     ConsoleDock& d = dockFor(terms_[id].tab);
     d.tabs->setCurrentWidget(terms_[id].box);
@@ -2511,6 +2527,7 @@ void Host::restoreTerm(const QString& id) {
 }
 
 void Host::scheduleSave() {
+  noteView();
   if (sessionTimer_ && !quitting_ && statePersisted()) sessionTimer_->start();
 }
 
@@ -2542,9 +2559,103 @@ void Host::saveSession() {
                               {"current", terms_.contains(cur) ? sessionKey(terms_[cur]) : QString()}};
   }
   out["consoles"] = cons;
+  QJsonArray stack;
+  for (const QJsonObject& p : std::as_const(history_)) stack << p;
+  out["history"] = QJsonObject{{"stack", stack}, {"at", historyAt_}};
   session_ = out;
   QSettings st("my-claude", "mc-term");
   st.setValue("session", QJsonDocument(out).toJson(QJsonDocument::Compact));
+}
+
+// ---- focus history: a browser's, over where the keyboard went -----------------------------
+
+// A pane by its session key; "" when it is gone.
+QString Host::termByKey(const QString& key) const {
+  if (key.isEmpty()) return {};
+  for (auto it = terms_.cbegin(); it != terms_.cend(); ++it) if (sessionKey(*it) == key) return it.key();
+  return {};
+}
+
+// The view now: the tab in front, the pane with the keyboard and its entry, how that tab's panes
+// are shown, the consoles' panels.
+QJsonObject Host::viewSnapshot() {
+  const QString k = terms_.contains(activeId_) ? activeId_ : termHolding(QApplication::focusWidget());
+  QJsonObject v{{"window", "main"}, {"tab", currentView()}, {"keys", terms_.contains(k) ? sessionKey(terms_[k]) : QString()},
+                {"node", terms_.contains(k) ? terms_[k].node : QString()}};
+  if (Tab* t = tabOf(currentView())) {
+    QJsonArray minimised;
+    for (const QString& id : t->order) if (terms_.contains(id) && terms_[id].minimised) minimised << sessionKey(terms_[id]);
+    v["zoomed"] = terms_.contains(t->zoomed) ? sessionKey(terms_[t->zoomed]) : QString();
+    v["minimised"] = minimised;
+    v["group"] = t->group;
+  }
+  QJsonObject cons;
+  for (const ConsoleDock& d : std::as_const(docks_)) {
+    QWidget* w = d.tabs->currentWidget();
+    const QString cur = termHolding(w ? w->findChild<QTermWidget*>() : nullptr);
+    cons[d.tab] = QJsonObject{{"shownIn", QJsonArray::fromStringList(QStringList(d.shownIn.begin(), d.shownIn.end()))}, {"maximised", d.maximised},
+                              {"current", terms_.contains(cur) ? sessionKey(terms_[cur]) : QString()}};
+  }
+  v["consoles"] = cons;
+  return v;
+}
+
+// That view back, as far as its panes are still there; false when its pane is gone.
+bool Host::applyView(const QJsonObject& v) {
+  const QString id = termByKey(v.value("keys").toString());
+  if (id.isEmpty()) return false;
+  navigating_ = true;
+  if (Tab* t = tabOf(v.value("tab").toString())) {
+    const QJsonArray minimised = v.value("minimised").toArray();
+    const QStringList ids = t->order;
+    for (const QString& p : ids) if (terms_.contains(p) && terms_[p].minimised != minimised.contains(sessionKey(terms_[p]))) setMinimised(p, !terms_[p].minimised);
+    t->zoomed = termByKey(v.value("zoomed").toString());
+    t->group = v.value("group").toInt();
+    retile(*t);
+    tabs_->setCurrentWidget(t->page);
+  }
+  const QJsonObject cons = v.value("consoles").toObject();
+  for (ConsoleDock& d : docks_) {
+    if (!cons.contains(d.tab)) continue;
+    const QJsonObject c = cons.value(d.tab).toObject();
+    d.shownIn.clear();
+    for (const auto& s : c.value("shownIn").toArray()) d.shownIn.insert(s.toString());
+    d.maximised = c.value("maximised").toBool();
+    if (const QString cur = termByKey(c.value("current").toString()); terms_.contains(cur)) d.tabs->setCurrentWidget(terms_[cur].box);
+  }
+  layoutDocks();
+  focusTerm(id);
+  navigating_ = false;
+  return true;
+}
+
+// The keyboard somewhere new: a new point (what was ahead of it goes, as in a browser).
+void Host::noteFocus() {
+  if (navigating_ || (restoring_ && !userActed_)) return;
+  const QJsonObject v = viewSnapshot();
+  if (v.value("keys").toString().isEmpty()) return;
+  if (historyAt_ >= 0 && history_[historyAt_].value("keys") == v.value("keys")) { history_[historyAt_] = v; return; }
+  history_.erase(history_.begin() + historyAt_ + 1, history_.end());
+  history_ << v;
+  while (history_.size() > 200) history_.removeFirst();
+  historyAt_ = int(history_.size()) - 1;
+}
+
+// The view changed where the keyboard already is: that point keeps it as it is now.
+void Host::noteView() {
+  if (navigating_ || leaving_ || historyAt_ < 0 || historyAt_ >= int(history_.size())) return;
+  const QJsonObject v = viewSnapshot();
+  if (v.value("keys") == history_[historyAt_].value("keys")) history_[historyAt_] = v;
+}
+
+// Back (-1) or forward (+1), past points whose pane is gone.
+void Host::goHistory(int step) {
+  for (int i = historyAt_ + step; i >= 0 && i < int(history_.size()); i += step) {
+    if (!applyView(history_[i])) continue;
+    historyAt_ = i;
+    scheduleSave();
+    return;
+  }
 }
 
 // ---- consoles: a machine's shells, in a panel over the tabs ------------------------------
@@ -3224,6 +3335,14 @@ void Host::sidebarFocus() {
 bool Host::eventFilter(QObject* o, QEvent* e) {
   if (!userActed_ && (e->type() == QEvent::KeyPress || e->type() == QEvent::MouseButtonPress) && e->spontaneous()) userActed_ = true;
   if (dockEvent(o, e)) return true;
+  // the mouse's back and forward buttons walk the focus history, wherever the mouse is
+  if (e->type() == QEvent::MouseButtonPress || e->type() == QEvent::MouseButtonRelease) {
+    const Qt::MouseButton b = static_cast<QMouseEvent*>(e)->button();
+    if (b == Qt::BackButton || b == Qt::ForwardButton) {
+      if (e->type() == QEvent::MouseButtonPress) goHistory(b == Qt::BackButton ? -1 : 1);
+      return true;
+    }
+  }
   if (pathEvent(o, e)) return true;
   // typing means the eyes are elsewhere: the preview of the entry under the mouse goes
   if ((e->type() == QEvent::KeyPress || e->type() == QEvent::ShortcutOverride) && preview_ && preview_->isVisible()) hidePreview();
@@ -3378,6 +3497,8 @@ void Host::local(const QString& a) {
   else if (a == "host.pane-up") movePane(0, -1);
   else if (a == "host.pane-down") movePane(0, 1);
   else if (a == "host.zoom") toggleZoom(cur);
+  else if (a == "host.back") goHistory(-1);
+  else if (a == "host.forward") goHistory(1);
   else if (a == "host.minimise") setMinimised(cur, true);
   else if (a == "host.restore") {
     if (Tab* tab = currentTab()) { const QStringList ids = tab->order; for (const QString& id : ids) setMinimised(id, false); }
