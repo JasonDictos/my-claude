@@ -80,6 +80,9 @@ maximised, shownIn[], current, tabs[]}`.
 | `focus` | `id` | Its tab, its group of panes, the keyboard. |
 | `set` | `id`, `title`, `color`, `attention`, `node` | Change what its header shows and which tree entry is its own. |
 | `order` | `tab`, `ids[]` | The order of a tab's panes. |
+| `plan` | `id`, `tab`, `path`, `agent`, `text` | A plan agent pane `id` asked the user to read: Markdown in a panel over `tab` only; again for the same `id`: reloaded, scroll kept. |
+| `plan-close` | `id` | Its plan panel goes. |
+| `copy` | `text` | Onto the clipboard, said in the status bar. |
 | `tab` | `tab`, `color`, `focus`, `close`, or `cycle: ±1` | A tab's colour (also the hue of its terminals), focus, close; or step through the tabs. |
 | `tabs` | `order[]` | The order of the tabs. |
 | `zoom` / `minimise` | `id`, `on` | One pane over the whole tab; a pane parked as a button under the grid. |
@@ -127,7 +130,7 @@ state is in) · `exited {id, reason}` (its program or pane ended; the terminal i
 removed) · `closed {id}` · `reattached {session}` · `fell-behind {id}` · `focused {id, tab}` · `tab {tab}` ·
 `tab-close {tab}` (the user clicked a tab's ×: the driver decides) · `select {node}` /
 `activate {node}` (click; Enter or double-click) · `action {action, node, id, tab}` ·
-`answer {id, values | cancelled}` · `settings {values}` · `settings-open` ·
+`answer {id, values | cancelled}` · `plan-ask {id, path, selection, question}` (Enter in a plan's ask box; `selection` the passage selected, lines joined by `\n`) · `plan-closed {id}` · `settings {values}` · `settings-open` ·
 `minimised {id, on}` · `note {id, title, body}` (a program asked the terminal to
 notify) · `scrollback-dropped {id, lines}` · `bell {id}` · `title {id, title}` ·
 `list`, `screen`, `grabbed`, `pong` (replies) · `error {error}` · `quit`.

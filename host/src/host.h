@@ -21,6 +21,7 @@
 class Dialect;
 class Feed;
 class FormDialog;
+class PlanPanel;
 class TmuxControl;
 class QAction;
 class QDockWidget;
@@ -317,6 +318,9 @@ private:
   void layoutDocks();
   void showDock(const QString& tab, bool focus);
   void hideDock(const QString& tab);
+  // plans agents asked the user to read, by the agent's pane id: each over its tab only
+  QMap<QString, PlanPanel*> plans_;
+  void layoutPlans();
   void dropDock(const QString& tab);
   void pinDock(const QString& tab, bool on);
   void saveDock(const ConsoleDock& d) const;

@@ -512,6 +512,25 @@ await Bun.sleep(300);
 if (dock(await u.list()).visible) fail("an unpinned panel the keyboard left should be gone from demo too");
 u.send({ op: "send", id: con1, text: "exit\r" });
 await u.shows("no consoles", (x) => !dock(x) || dock(x).count === 0);
+// a plan over an agent's pane: shown over its tab only; a question comes back with the selection
+u.send({ op: "tab", tab: "demo", focus: true });
+u.send({ op: "plan", id: r1.id, tab: "demo", path: "docs/plan.md", agent: "r1", text: "# Plan\n\n## Task 3\n\n- One **reactor** per disk\n" });
+await u.shows("the plan over demo", (x) => x.plans?.some((p: any) => p.id === r1.id && p.visible && p.text.includes("One reactor per disk")));
+u.send({ op: "plan-select", id: r1.id, text: "reactor per disk" });
+for (const c of "why?") await key(c);
+await key("Return");
+{
+  const ask = await u.until("plan-ask");
+  if (ask.id !== r1.id || ask.selection !== "reactor per disk" || ask.question !== "why?" || ask.path !== "docs/plan.md") fail("the question should come back with the selection", ask);
+}
+u.send({ op: "plan", id: r1.id, tab: "demo", path: "docs/plan.md", agent: "r1", text: "# Plan\n\n- Two reactors\n" });
+await u.shows("the plan updated in place", (x) => x.plans?.length === 1 && x.plans[0].text.includes("Two reactors"));
+u.send({ op: "tab", tab: "second-one", focus: true });
+await u.shows("not over another project", (x) => x.current === "second-one" && !x.plans[0].visible);
+u.send({ op: "tab", tab: "demo", focus: true });
+await u.shows("back over demo", (x) => x.current === "demo" && x.plans[0].visible);
+u.send({ op: "plan-close", id: r1.id });
+await u.shows("closed", (x) => !x.plans?.length);
 // --- more panes than fit: a shell on demo's second screen is still on screen on coming back
 u.send({ op: "look", perGroup: 2 });
 u.send({ op: "focus", id: l.terminals.find((t: any) => t.tab === "demo" && t.title === "r1").id });

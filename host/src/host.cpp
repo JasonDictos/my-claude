@@ -4,6 +4,7 @@
 #include "dialect.h"
 #include "layericon.h"
 #include "form.h"
+#include "planpanel.h"
 #include "theme.h"
 #include "tmuxctl.h"
 #include <QAction>
@@ -1110,6 +1111,33 @@ void Host::handle(const QJsonObject& m, QLocalSocket* from) {
     if (m.value("open").toBool()) openSettings();
     return;
   }
+  if (op == "plan") { // a plan an agent asked the user to read, over its tab; again: reloaded
+    PlanPanel*& p = plans_[id];
+    if (!p) {
+      p = new PlanPanel(center_);
+      const QRect area = center_->rect();
+      p->setGeometry(area.width() * 2 / 5, 16, qMax(360, area.width() * 11 / 20), qMax(240, area.height() * 3 / 4));
+      connect(p, &PlanPanel::asked, this, [this, id](const QString& selection, const QString& question) {
+        if (PlanPanel* q = plans_.value(id)) emitEvent({{"ev", "plan-ask"}, {"id", id}, {"path", q->path()}, {"selection", selection}, {"question", question}});
+      });
+      connect(p, &PlanPanel::closed, this, [this, id] {
+        if (PlanPanel* q = plans_.take(id)) q->deleteLater();
+        emitEvent({{"ev", "plan-closed"}, {"id", id}});
+      });
+    }
+    p->tab = m.value("tab").toString();
+    p->setPlan(m.value("path").toString(), m.value("agent").toString(), m.value("text").toString());
+    layoutDocks();
+    return;
+  }
+  if (op == "plan-close") {
+    if (PlanPanel* p = plans_.take(id)) p->deleteLater();
+    return;
+  }
+  if (op == "plan-select" && qEnvironmentVariableIsSet("MC_TERM_TEST")) { // tests: a passage dragged over, the ask box clicked
+    if (PlanPanel* p = plans_.value(id)) p->select(m.value("text").toString());
+    return;
+  }
   if (op == "copy") { // text onto the clipboard, said in the status bar
     QGuiApplication::clipboard()->setText(m.value("text").toString());
     statusBar()->showMessage("copied " + m.value("text").toString(), 4000);
@@ -1290,7 +1318,7 @@ void Host::handle(const QJsonObject& m, QLocalSocket* from) {
     const Tab* cur = currentTab();
     reply(from, {{"ev", "list"}, {"terminals", terms}, {"tabs", tabNames}, {"current", cur ? cur->name : QString()}, {"consoles", docks}, {"nodes", nodes}, {"toolbar", tools}, {"overview", overview_ != nullptr},
                  {"asks", asks}, {"preview", preview_ && preview_->isVisible() ? previewId_ : QString()}, {"actions", acts}, {"selected", currentNode()}, {"sidebar", dock_->isVisible()}, {"driver", driver_ != nullptr},
-                 {"shown", isVisible() && !(windowState() & Qt::WindowMinimized)}, {"fullScreen", isFullScreen()}, {"keyBar", keyBar_ && keyBar_->isVisible()}, {"menuBar", menuBar()->isVisible()}, {"badges", int(badges_.size())}, {"keyBarText", keyBar_ ? keyBar_->text() : QString()}, {"activeWindow", isActiveWindow()}, {"opened", lastOpened_}, {"clipboard", qEnvironmentVariableIsSet("MC_TERM_TEST") ? QGuiApplication::clipboard()->text() : QString()},
+                 {"shown", isVisible() && !(windowState() & Qt::WindowMinimized)}, {"fullScreen", isFullScreen()}, {"keyBar", keyBar_ && keyBar_->isVisible()}, {"menuBar", menuBar()->isVisible()}, {"badges", int(badges_.size())}, {"keyBarText", keyBar_ ? keyBar_->text() : QString()}, {"activeWindow", isActiveWindow()}, {"plans", [&] { QJsonArray a; for (auto it = plans_.cbegin(); it != plans_.cend(); ++it) a.append(QJsonObject{{"id", it.key()}, {"tab", it.value()->tab}, {"path", it.value()->path()}, {"visible", it.value()->isVisible()}, {"text", it.value()->plainText()}}); return a; }()}, {"opened", lastOpened_}, {"clipboard", qEnvironmentVariableIsSet("MC_TERM_TEST") ? QGuiApplication::clipboard()->text() : QString()},
                  // where an open dialog puts the keyboard once it has it
                  {"dialogsShown", [] { int n = 0; for (QWidget* w : QApplication::topLevelWidgets()) n += qobject_cast<QDialog*>(w) && w->isVisible(); return n; }()}, {"askFocus", [&] { for (FormDialog* d : asks_) if (d && d->focusWidget()) return QString(d->focusWidget()->metaObject()->className()); return QString(); }()}});
     return;
@@ -2624,6 +2652,7 @@ ConsoleDock& Host::dockFor(const QString& tab) {
 // Each panel up (over the tabs it was opened on, or every one when pinned), maximised over the
 // whole view, or not shown; never off the view.
 void Host::layoutDocks() {
+  layoutPlans(); // first: the consoles' panel is raised over them below
   scheduleSave();
   const QString view = currentView();
   const QRect area = center_->rect();
@@ -2670,6 +2699,21 @@ void Host::hideDock(const QString& tab) {
   if (it->pinned) { it->pinned = false; it->pin->setChecked(false); it->shownIn.clear(); saveDock(*it); }
   else it->shownIn.remove(currentView());
   layoutDocks();
+}
+
+// Each plan over its own tab only, kept on the view.
+void Host::layoutPlans() {
+  const QString view = currentView();
+  const QRect area = center_->rect();
+  for (PlanPanel* p : std::as_const(plans_)) {
+    if (p->tab != view) { p->hide(); continue; }
+    QRect r = p->geometry();
+    r.moveLeft(qBound(0, r.left(), qMax(0, area.width() - 80)));
+    r.moveTop(qBound(0, r.top(), qMax(0, area.height() - 24)));
+    p->setGeometry(r);
+    p->show();
+    p->raise();
+  }
 }
 
 // Off every view, unless pinned or the keyboard came back to it meanwhile.
