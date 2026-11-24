@@ -15,7 +15,7 @@ import { profile, profiles } from "./profiles/index.ts";
 import { REMOTE_PATH } from "./remote.ts";
 import { lockInfo, occupantPid, whoOf } from "./live.ts";
 import type { ProfileAction } from "./profiles/types.ts";
-import { CONFIG_DIR, PROJECTS, ROOT, UsageError, config, daemonSettings, defaultProfile, saveConfig, slug, type Trashed } from "./store.ts";
+import { CONFIG_DIR, PROJECTS, ROOT, UsageError, config, daemonSettings, defaultProfile, load, saveConfig, slug, type Trashed } from "./store.ts";
 import { adoptShellEnv, out, sh, shOk } from "./sh.ts";
 
 type Dict = Record<string, any>;
@@ -331,6 +331,8 @@ class Driver {
   private pendingFocus: string | null = null;
   private pendingFocusAge = 0;
   private pendingTab: string | null = null;
+  // projects being set up (undelete cloning their repos): greyed, their repos animated until done
+  private settingUp = new Set<string>();
   private asks = new Map<string, (v: Dict | null) => void>();
   private askSeq = 0;
   private lists: ((l: Dict) => void)[] = [];
@@ -608,7 +610,7 @@ class Driver {
   // The consoles: always open in the window (it shows them or not), whatever tab is in front.
   private async ensureConsoles(cons: consoles.Console[]): Promise<void> {
     const specOf = (c: consoles.Console): TermSpec => {
-      const spec: TermSpec = { id: `${consoles.TAB}/${c.pane}`, tab: consoles.TAB, title: c.name, color: SHELL_COLOR, attention: "", node: consoles.NODE, skey: `${consoles.TAB}/${c.name}` };
+      const spec: TermSpec = { id: `${consoles.TAB}/${c.pane}`, tab: consoles.TAB, title: c.name, color: SHELL_COLOR, attention: "", node: consoles.nodeOf(c.pane), skey: `${consoles.TAB}/${c.name}` };
       spec.scheme = String(this.prefs("paneSchemes")[spec.skey!] ?? "");
       spec.textStep = Number(this.prefs("paneText")[spec.skey!] ?? 0);
       return spec;
@@ -644,12 +646,16 @@ class Driver {
     this.sendIfChanged(`order:${consoles.TAB}`, { op: "order", tab: consoles.TAB, ids: cons.map((c) => specOf(c).id).filter((id) => this.terms.has(id)) });
   }
 
-  // One entry for all of this machine's consoles: Enter shows them (opening one if there are none).
+  // One entry for this machine's consoles (Enter shows them, opening one if there are none),
+  // and one under it per console: a click goes to it, F2 renames it.
   private consoleNode(cons: consoles.Console[]): Dict {
-    const act = (id: string, label: string) => ({ id, label, enabled: true });
+    const act = (id: string, label: string, key?: string) => ({ id, label, enabled: true, ...(key ? { key } : {}) });
     return { id: consoles.NODE, label: "Consoles", icon: "terminal", badge: cons.length ? String(cons.length) : "", dim: !cons.length, can: ["console.new"],
-      tooltip: cons.length ? `${cons.map((c) => c.name).join(", ")}\nShells on this machine, over whichever project is in front (Enter shows them)` : "No consoles yet: Enter, or Ctrl+Shift+N, opens one",
-      actions: [act("console.show", "Show"), act("console.new", "New console")] };
+      tooltip: cons.length ? "Shells on this machine, over whichever project is in front (Enter shows them)" : "No consoles yet: Enter, or Ctrl+Shift+N, opens one",
+      actions: [act("console.show", "Show"), act("console.new", "New console")],
+      children: cons.map((c) => ({ id: consoles.nodeOf(c.pane), label: c.name, name: c.name, nameMax: consoles.NAME_MAX, icon: "terminal", color: SHELL_COLOR, can: ["console.new"],
+        tooltip: c.shell ? "a shell on this machine" : `running ${c.command}`,
+        actions: [act("pane.focus", "Go to it"), act("pane.rename", "Rename… (F2)"), act("pane.close", "Close…", "x")] })) };
   }
 
   // a project without a tab goes back to the terminal UI's layout (gui.keepSolo: leave it)
@@ -697,6 +703,7 @@ class Driver {
 
     // the toolbar buttons that apply with this project highlighted (the window greys the rest)
     const projectCan = ["project.add", ...(s.state !== "UP" ? ["project.open"] : []), ...(s.up ? ["project.down", "pane.chat"] : [])];
+    const settingUp = this.settingUp.has(name);
     const peerNode = (peer: core.PeerSnap): Dict => {
       const shells = s.panes.filter((x) => x.title !== tmux.PANEL_TITLE && core.shellRepo(tmux.label(x)) === peer.repo);
       // in a container or not: what its claude runs in when it runs, else what its profile does
@@ -706,18 +713,19 @@ class Driver {
         act("peer.restart", "Relaunch…", "R", s.up && peer.state !== "occupied"), act("peer.index", "Rebuild symbol index", "i"), sep,
         act("peer.files", "Open folder", "f"), act("peer.lead", peer.repo === p.lead ? "Change the goal…" : "Make lead…", "l"), act("peer.model", "Model…", "m")];
       if (peer.state === "occupied") pa.push(act("peer.takeover", "Take over (stop the session holding it)…"));
-      pa.push(sep, act("peer.rename", "Rename… (F2)"), act("peer.remove", "Remove from project…", "x"));
+      pa.push(sep, act("peer.rename", "Rename… (F2)"), act("peer.remove", "Close…", "x"));
+      const cloning = settingUp && !existsSync(peer.path);
       return {
         // greyed while its Claude is not running here
         // a terminal like its shells (docker or not); a plain folder (a home directory) shows its path
         id: `r:${name}/${peer.repo}`, label: (peer.label || (isRepo(peer.path) ? peer.repo : `${tilde(peer.path)}/`)) + (peer.repo === p.lead ? " ★" : ""), icon: boxed ? "container-claude" : "terminal-claude",
         name: peer.label || (isRepo(peer.path) ? peer.repo : `${tilde(peer.path)}/`),
         can: [...projectCan, ...(peer.state === "live" ? ["pane.shell"] : []), ...(s.up ? ["pane.hostshell"] : [])],
-        dim: peer.state === "down" || peer.state === "occupied",
-        // what its icon shows; a file left by a Claude that is gone says nothing
-        state: peer.state === "live" ? peer.attn ?? "" : "", bold: peer.attn === "ask",
+        dim: cloning || peer.state === "down" || peer.state === "occupied",
+        // what its icon shows (working while it is cloned); a file left by a Claude that is gone says nothing
+        state: cloning ? "work" : peer.state === "live" ? peer.attn ?? "" : "", bold: peer.attn === "ask",
         badge: attnBadge(peer.attn), badgeColor: attnColor(peer.attn), actions: pa,
-        tooltip: `${tilde(peer.path)}\n${peer.state}${peer.model ? " · " + peer.model : ""} · conversation ${peer.session.slice(0, 8)}`,
+        tooltip: `${tilde(peer.path)}\n${cloning ? "being cloned" : peer.state}${peer.model ? " · " + peer.model : ""} · conversation ${peer.session.slice(0, 8)}`,
         // under its repo a shell needs no name of its own: a terminal icon, and where it runs
         children: shells.map((x) => {
           const inBox = !tmux.label(x).startsWith("host:") && boxed;
@@ -729,9 +737,9 @@ class Driver {
     };
     const chat = s.panes.find((x) => tmux.label(x) === `chat:${name}`);
     return {
-      id: `p:${name}`, label: p.label || name, name: p.label || name, icon: "project", color: s.color, can: projectCan,
+      id: `p:${name}`, label: p.label || name, name: p.label || name, icon: "project", color: s.color, can: projectCan, dim: settingUp,
       badge: attnBadge(s.attn), badgeColor: attnColor(s.attn), actions,
-      tooltip: [p.goal ? `Goal: ${p.goal.split("\n")[0].slice(0, 160)}` : "", p.ticket ? `Ticket: ${p.ticket}` : "", `${p.mode === "shared" ? "one shared container" : "a container per repo"} · profile ${p.profile} · ${s.state}`].filter(Boolean).join("\n"),
+      tooltip: [settingUp ? "Being set up: its repos are being cloned (a Start waits for them)" : "", p.goal ? `Goal: ${p.goal.split("\n")[0].slice(0, 160)}` : "", p.ticket ? `Ticket: ${p.ticket}` : "", `${p.mode === "shared" ? "one shared container" : "a container per repo"} · profile ${p.profile} · ${s.state}`].filter(Boolean).join("\n"),
       children: [...s.peers.map(peerNode), ...(chat ? [{ id: `t:${name}/${chat.id}`, label: "chat", color: CHAT_COLOR, actions: [act("pane.focus", "Go to it"), act("pane.close", "Leave the chat…", "x")] }] : [])],
     };
   }
@@ -760,7 +768,7 @@ class Driver {
       { title: "&my-claude", items: [
         item("app.new", "New project…", [], "n"),
         ...this.profileActions().map((a) => item(`profile.${a.key}`, `${a.label}…`, [], a.key)),
-        item("app.undelete", "Undelete a project…", [], "U"), sep,
+        item("app.undelete", "Undelete a project…", [], "u"), sep,
         { label: "Connect", items: [
           ...Object.entries((config().gui?.hosts ?? {}) as Record<string, { dest?: string; port?: number }>).sort(([a], [b]) => a.localeCompare(b))
             .map(([n, h]) => ({ id: `app.connect:${n}`, label: `${n}    ${h.dest}${h.port ? `:${h.port}` : ""}` })),
@@ -776,7 +784,7 @@ class Driver {
         item("project.hide", "Close this tab"), item("project.down", "Bring down…")] },
       { title: "P&ane", items: [
         item("pane.shell", "Shell in its environment", ["Ctrl+Shift+H"]), item("pane.hostshell", "Host shell in its checkout", ["Ctrl+Alt+H", "Ctrl+Alt+Shift+H"]),
-        item("pane.restart", "Relaunch…", ["Ctrl+Shift+R"]), item("pane.close", "Close, or remove the peer…", ["Ctrl+W", "Ctrl+Shift+X"]), sep,
+        item("pane.restart", "Relaunch…", ["Ctrl+Shift+R"]), item("pane.close", "Close, or remove the peer…", ["Ctrl+W", "Ctrl+Shift+X"]), item("pane.rename", "Rename", ["F2"]), sep,
         item("host.zoom", "Zoom", ["Ctrl+Shift+Z"]), item("host.minimise", "Minimise", ["Ctrl+M", "Ctrl+Shift+M"]), item("host.restore", "Restore all minimised"), sep,
         item("host.pane-next", "Next pane", ["Ctrl+Shift+Tab", "Ctrl+Shift+O"]), item("host.pane-prev", "Previous pane", ["Ctrl+Shift+P"]),
         item("host.pane-left", "Pane to the left", ["Ctrl+Shift+Left"]), item("host.pane-right", "Pane to the right", ["Ctrl+Shift+Right"]),
@@ -1022,6 +1030,7 @@ class Driver {
   // (start what is not).
   private go(node: string, activate: boolean): void {
     if (node === consoles.NODE) { if (activate) void this.consoleShow().catch((e) => this.fail(e)); return; }
+    if (consoles.paneOf(node)) { this.send({ op: "focus", id: `${consoles.TAB}/${consoles.paneOf(node)}` }); return; }
     const t = this.target({ node });
     const s = this.snap(t.name);
     if (!s || !t.name) return;
@@ -1033,7 +1042,10 @@ class Driver {
   }
 
   private async openProject(name: string, focus: string | null = null): Promise<void> {
-    const s = this.snap(name);
+    // work on it under way (its repos being cloned in): decide on what that leaves
+    const s = this.active.has(name)
+      ? await this.chains.get(name)!.then(async () => (await core.snapshot()).find((x) => x.project.name === name) ?? null)
+      : this.snap(name);
     if (!s) return;
     const missing = s.peers.some((x) => x.state === "down");
     if (!s.up || missing) {
@@ -1062,6 +1074,7 @@ class Driver {
   private async onRename(node: string, raw: string): Promise<void> {
     const label = raw.trim().slice(0, 64);
     let m: RegExpExecArray | null;
+    if (consoles.paneOf(node)) return this.consoleRename(consoles.paneOf(node), label);
     if ((m = /^p:([^/]+)$/.exec(node))) core.renameProject(m[1], label);
     else if ((m = /^r:([^/]+)\/(.+)$/.exec(node))) core.renamePeer(m[1], m[2], label);
     else if ((m = /^t:[^/]+\/(%\d+)$/.exec(node))) await tmux.renamePane(m[1], label);
@@ -1071,10 +1084,13 @@ class Driver {
 
   private async onAction(ev: Dict): Promise<void> {
     const a = String(ev.action);
-    const cid = String(ev.id ?? "").startsWith(`${consoles.TAB}/`) ? String(ev.id).slice(consoles.TAB.length + 1) : "";
+    // the console meant: its entry's, from the list; else the one with the keyboard
+    const held = String(ev.id ?? "").startsWith(`${consoles.TAB}/`) ? String(ev.id).slice(consoles.TAB.length + 1) : "";
+    const cid = ev.focus === "tree" ? consoles.paneOf(String(ev.node ?? "")) : held || consoles.paneOf(String(ev.node ?? ""));
     if (a === "console.new") return this.consoleNew();
     if (a === "console.show") return this.consoleShow();
-    if (a === "pane.close" && cid && ev.focus !== "tree") return this.consoleClose(cid);
+    if (a === "pane.close" && cid) return this.consoleClose(cid);
+    if (a === "pane.focus" && cid) { this.send({ op: "focus", id: `${consoles.TAB}/${cid}` }); return; }
     const t = this.target(ev);
     const name = t.name ?? "";
     const project = () => { if (!this.snap(name)) throw new Error("pick a project first (its tab, or its entry in the list)"); return name; };
@@ -1302,6 +1318,7 @@ class Driver {
     const i = names.indexOf(machine);
     if (i >= 0 && !checks[i].ok) throw new Error(`${machine}: ${checks[i].why}`);
     const h = hosts[machine];
+    const specs = core.splitRepoSpecs(String(v.repos ?? "").trim()); // before anything is made there
     await this.work(`${name}@${machine}`, `creating ${name} on ${machine}…`, async () => {
       // `fine`: what a retry meets after an earlier attempt failed further on
       const step = async (args: string[], fine?: RegExp) => {
@@ -1310,7 +1327,6 @@ class Driver {
       };
       try {
         await step(["new", name, ...(v.goal ? ["--goal", String(v.goal)] : []), ...(v.color ? ["--color", String(v.color)] : []), ...(v.mode === "shared" ? ["--shared"] : [])], /project '[^']*' exists/);
-        const specs = core.splitRepoSpecs(String(v.repos ?? "").trim());
         for (const spec of specs) await step(["add", name, ...spec.split(/\s+/), "--takeover"], /already in/);
         if (specs.length) await step(["up", name, "--no-attach", "--takeover"]);
       } finally {
@@ -1322,13 +1338,18 @@ class Driver {
 
   private async createProject(name: string, o: { goal?: string; shared?: boolean; color?: string; ticket?: string }, repos: string): Promise<void> {
     await this.work(name, `creating ${name}…`, async () => {
+      core.splitRepoSpecs(repos); // a line it cannot read leaves no empty project behind
       core.newProject(name, { goal: o.goal || undefined, shared: o.shared, color: o.color, ticket: o.ticket || undefined });
       if (!repos.trim()) { this.notify(`created ${name}; add repos to start it`); return; }
-      await core.addRepos(name, repos, { log: (m) => this.progress(name, `${name}: ${m}`), takeover: true });
-      await core.ensureBinary();
-      await core.up(name, { takeover: true }); // its repos were just added: wanted here
-      await core.syncGroupNow(name);
-      this.show(name);
+      this.settingUp.add(name);
+      this.requestSync();
+      try {
+        await core.addRepos(name, repos, { log: (m) => this.progress(name, `${name}: ${m}`), takeover: true });
+        await core.ensureBinary();
+        await core.up(name, { takeover: true }); // its repos were just added: wanted here
+        await core.syncGroupNow(name);
+        this.show(name);
+      } finally { this.settingUp.delete(name); }
     });
   }
 
@@ -1360,9 +1381,15 @@ class Driver {
     if (!v?.which) return;
     const [m, dir] = [String(v.which).split("|")[0], String(v.which).split("|").slice(1).join("|")];
     if (m === ".") {
-      await this.work("*trash", "restoring…", async () => {
-        const r = await core.undelete(dir, (msg) => this.progress("*trash", msg));
-        this.notify(`restored ${r.name}${r.recloned.length ? `; cloned again: ${r.recloned.join(", ")}` : ""}${r.missing.length ? `; missing: ${r.missing.join(", ")}` : ""}${r.leftOut.length ? `; left out ${r.leftOut.join("; ")}` : ""}`, { error: r.missing.length > 0 });
+      // the project's own work, so a Start meanwhile waits for its clones
+      const name = rows.find((r) => r.m === "." && r.t.dir === dir)?.t.name ?? "*trash";
+      this.settingUp.add(name);
+      await this.work(name, `restoring ${name}…`, async () => {
+        try {
+          // its record is back before the first clone starts: the list shows it, greyed
+          const r = await core.undelete(dir, (msg) => { this.progress(name, msg); this.requestSync(); });
+          this.notify(`restored ${r.name}${r.recloned.length ? `; cloned again: ${r.recloned.join(", ")}` : ""}${r.missing.length ? `; missing: ${r.missing.join(", ")}` : ""}${r.leftOut.length ? `; left out ${r.leftOut.join("; ")}` : ""}${r.notes.length ? `; ${r.notes.join("; ")}` : ""}`, { error: r.missing.length > 0 });
+        } finally { this.settingUp.delete(name); }
       });
       return;
     }
@@ -1498,11 +1525,14 @@ class Driver {
     // the dialog at once, with the last list known; the fresh one is filled in when it comes
     const cached = org ? this.cachedRepos(org) : null;
     const id = `ask-${++this.askSeq}`;
-    const answer = this.ask({ title: `Add repos to ${name}`, ok: "Add", schema: { type: "object", order: ["pick", "folder", "spec"], properties: {
+    const boxed = this.snap(name)?.project.profile !== "host"; // only a container has ports to forward into
+    const answer = this.ask({ title: `Add repos to ${name}`, ok: "Add", schema: { type: "object", order: ["pick", "folder", "spec", "ports"], properties: {
       ...(org ? { pick: { type: "array", format: "picker", title: `${org}'s repos`, columns: ["Repo", "Description"], ...choices(cached ?? []), note: cached ? "refreshing…" : "loading…",
         description: "Tick any number; each is cloned fresh into the project." } } : {}),
       folder: { type: "string", format: "path", title: "A folder here", description: "An existing checkout, used where it is (no clone)." },
-      spec: { type: "string", title: "Anything else", placeholder: "org/repo  https://…  git@host:repo  ~/path  (--branch B, --name N after one)", description: "Space separated: other organisations' repos, git URLs, a PR URL, paths." } } } }, id);
+      spec: { type: "string", title: "Anything else", placeholder: "org/repo  https://…  git@host:repo  ~/path  (--branch B, --name N after one)", description: "Space separated: other organisations' repos, git URLs, a PR URL, paths." },
+      ...(boxed ? { ports: { type: "string", title: "Forward ports", placeholder: "20808  8080:80  0.0.0.0:3000:3000",
+        description: "From this machine into each added repo's container: PORT (same both sides), HOST:CONTAINER, or IP:HOST:CONTAINER to listen beyond localhost. Space separated." } } : {}) } } }, id);
     if (org) void this.orgRepos(org, 0).then((repos) => this.send({ op: "fill", id, key: "pick", ...choices(repos), note: "" }),
       (e) => this.send({ op: "fill", id, key: "pick", ...choices(cached ?? []), note: `could not list them: ${errText(e)}` }));
     const v = await answer;
@@ -1510,16 +1540,22 @@ class Driver {
     const line = [...([] as unknown[]).concat(v.pick ?? []).filter(Boolean).map((r) => `${org}/${r}`), ...(v.folder ? [String(v.folder)] : []), ...(v.spec ? [String(v.spec)] : [])].join(" ").trim();
     if (!line) return;
     await this.work(name, `adding to ${name}…`, async () => {
-      const peers = await core.addRepos(name, line, { log: (m) => this.progress(name, `${name}: ${m}`), takeover: true });
-      await core.syncGroupNow(name);
-      this.notify(`added ${peers.map((p) => p.repo).join(", ")} to ${name}`);
+      const ports = String(v.ports ?? "").split(/\s+/).filter(Boolean);
+      // its first repos: the project is still being set up
+      const first = !load(name).peers.length;
+      if (first) { this.settingUp.add(name); this.requestSync(); }
+      try {
+        const peers = await core.addRepos(name, line, { log: (m) => this.progress(name, `${name}: ${m}`), takeover: true, ports });
+        await core.syncGroupNow(name);
+        this.notify(`added ${peers.map((p) => p.repo).join(", ")} to ${name}`);
+      } finally { if (first) this.settingUp.delete(name); }
     });
   }
 
   private async projectTicket(name: string): Promise<void> {
     const v = await this.ask({ title: `Ticket for ${name}`, ok: "Set", text: "The tracker ticket this project is for; every peer is told. Empty clears it.", schema: { type: "object", properties: { ticket: { type: "string", title: "Ticket", placeholder: "ABC-123" } } }, values: { ticket: this.snap(name)?.project.ticket ?? "" } });
     if (!v) return;
-    await this.work(name, "", () => { const t = core.setTicket(name, String(v.ticket ?? "")); this.notify(t ? `${name} is for ${t}` : `${name}: ticket cleared`); });
+    await this.work(name, "", async () => { const t = await core.setTicket(name, String(v.ticket ?? "")); this.notify(t ? `${name} is for ${t}` : `${name}: ticket cleared`); });
   }
 
   private async projectGoal(name: string): Promise<void> {
@@ -1587,7 +1623,10 @@ class Driver {
 
   private async peerRemove(name: string, repo: string): Promise<void> {
     const why = await this.checking(repo, () => core.peerLosses(name, repo));
-    if (why.length && !(await this.confirm(`Remove ${repo} from ${name}?`, `Its clone is deleted from disk, and with it work nothing else has: ${why.join(", ")}.\n\nRe-add brings the peer back on the same conversation, cloned afresh.`, "Delete anyway"))) return;
+    const ok = why.length
+      ? await this.confirm(`Close ${repo}?`, `Its clone is deleted from disk, and with it work nothing else has: ${why.join(", ")}.\n\nRe-add brings it back on the same conversation, cloned afresh.`, "Delete anyway")
+      : await this.confirm(`Close ${repo}?`, "Its session ends and its panes close; a clone the project made is deleted from disk. Re-add brings it back on the same conversation.", "Close");
+    if (!ok) return;
     await this.work(name, `removing ${repo}…`, async () => {
       const note = await core.rmPeer(name, repo, { force: true, wait: false });
       await core.syncGroupNow(name);
@@ -1603,7 +1642,10 @@ class Driver {
     }
     const at = await core.paneFacts(t.pane);
     if (at.peer) return this.peerRemove(name, at.rawTitle);
-    if (!(await this.confirm(`Close ${at.title}?`, "Whatever runs in it stops.", "Close"))) return;
+    // asks only when something besides its shell runs there; a chat pane is just the chat
+    const busy = at.role.startsWith("chat:") ? null : await core.paneBusy(t.pane);
+    const why = busy === "?" ? `${at.title} is a shell in a container, opened before my-claude could see what runs there: anything running in it stops.` : `${at.title} is running ${busy}: closing it ends it.`;
+    if (busy && !(await this.confirm(`Close ${at.title}?`, why, "Close"))) return;
     await this.work(name, "", async () => { await core.closePane(t.pane!); });
   }
 }

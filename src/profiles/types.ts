@@ -22,6 +22,8 @@ export interface LaunchCtx {
   // The same thing as one shell line, MY_CLAUDE_* prefixed: `MY_CLAUDE_PROJECT=x MY_CLAUDE_PEER=y claude --resume ...`.
   // Profiles run it inside an interactive shell that stays up after claude exits.
   cmdline: string;
+  // Ports to forward from this machine: PORT, HOST:CONTAINER or IP:HOST:CONTAINER (docker -p).
+  ports: string[];
 }
 
 export interface ActionPrompt {

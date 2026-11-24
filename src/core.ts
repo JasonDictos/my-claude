@@ -3,11 +3,12 @@
 // The commands, shared by the CLI, the menu, the MCP server and the window's driver. Child
 // processes are awaited, never blocked on, except where a program IS a pane's foreground job.
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
-import { rm } from "node:fs/promises";
+import { readdir, rm } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { basename, join } from "node:path";
 import { containerOf, killOccupant, lockInfo, occupantPid, occupantsIndex, peerState, peerStateOf, projectState, whoOf, type PeerState, type ProjectState } from "./live.ts";
 import { profile } from "./profiles/index.ts";
+import type { LaunchCtx } from "./profiles/types.ts";
 import { homedir } from "node:os";
 import { adoptShellEnv, pause, sh, shOk, shq, sleep, loginShell } from "./sh.ts";
 import * as peers from "./peers.ts";
@@ -83,11 +84,11 @@ export function ticketKey(s: string): string | null {
   return t;
 }
 
-export function setTicket(name: string, key: string): string | null {
+export async function setTicket(name: string, key: string): Promise<string | null> {
   const p = load(name);
   p.ticket = ticketKey(key);
   save(p);
-  void tellGroup(p, p.ticket ? `project "${p.name}" is now for ticket ${p.ticket}.` : `project "${p.name}" no longer has a ticket.`);
+  await tellGroup(p, p.ticket ? `project "${p.name}" is now for ticket ${p.ticket}.` : `project "${p.name}" no longer has a ticket.`);
   return p.ticket;
 }
 
@@ -135,7 +136,7 @@ export function ownerOf(path: string, except: string): { project: string; repo: 
 const ownedMsg = (path: string, o: { project: string; repo: string }) =>
   `${path.replace(homedir(), "~")} is already ${o.repo} in project ${o.project}; a folder belongs to one project (two would share its conversation)`;
 
-export async function addPeer(name: string, path: string, o: { role?: Role; model?: string | null; repo?: string; origin?: string; branch?: string; takeover?: boolean } = {}): Promise<Peer> {
+export async function addPeer(name: string, path: string, o: { role?: Role; model?: string | null; repo?: string; origin?: string; branch?: string; takeover?: boolean; ports?: string[] } = {}): Promise<Peer> {
   const p = load(name);
   let real: string;
   try {
@@ -158,11 +159,14 @@ export async function addPeer(name: string, path: string, o: { role?: Role; mode
   // An existing checkout keeps its history: its newest conversation becomes the peer's.
   const peer: Peer = { repo, path: real, role, model: o.model ?? null, session: latestSession(real) ?? crypto.randomUUID() };
   if (o.origin) { peer.origin = o.origin; if (o.branch) peer.branch = o.branch; }
+  if (o.ports?.length) peer.ports = o.ports;
   trustPath(real);
   p.peers.push(peer);
   save(p);
   if (await tmux.sessionUp(name)) await bring(p, peer, !!o.takeover);
-  void syncGroup(p).then(() => tellGroup(p, `${repo} joined the project at ${real}; it starts when the project is next brought up or added while up.`));
+  // the group has it and is told before this returns: a CLI or MCP call exits right after
+  await syncGroupNow(name);
+  await tellGroup(p, `${repo} joined the project at ${real}; it starts when the project is next brought up or added while up.`);
   return peer;
 }
 
@@ -180,7 +184,7 @@ export async function syncGroupNow(name: string): Promise<void> {
 
 // Running sessions learn roster changes by message; their system prompt is a snapshot.
 async function tellGroup(p: Project, text: string): Promise<void> {
-  if (p.peers.length && peers.available() && (await tmux.sessionUp(p.name))) void peers.broadcast(GROUP(p.name), `[my-claude] project "${p.name}": ${text}`);
+  if (p.peers.length && peers.available() && (await tmux.sessionUp(p.name))) await peers.broadcast(GROUP(p.name), `[my-claude] project "${p.name}": ${text}`);
 }
 
 // The project's claude-peers group holds every peer, addressed by path. Resolves to the
@@ -276,7 +280,25 @@ export interface RepoSpec {
   url?: boolean; // repo is a git URL, not a GitHub owner/name
 }
 
-export async function parseRepoSpec(line: string): Promise<RepoSpec & { name?: string }> {
+// A forwarded port: PORT, HOST:CONTAINER or IP:HOST:CONTAINER, as docker -p takes them.
+const PORT_RE = /^(?:(?:\d{1,3}\.){3}\d{1,3}:)?(?:\d{1,5}:)?\d{1,5}$/;
+function checkPort(p: string): string {
+  const nums = p.split(":").slice(-2).map(Number);
+  if (!PORT_RE.test(p) || nums.some((n) => n < 1 || n > 65535)) die(`bad port '${p}': PORT, HOST:CONTAINER or IP:HOST:CONTAINER`);
+  return p;
+}
+
+export async function parseRepoSpec(line: string): Promise<RepoSpec & { name?: string; ports?: string[] }> {
+  const words = line.trim().split(/\s+/).filter(Boolean), ports: string[] = [], rest: string[] = [];
+  for (let i = 0; i < words.length; i++) {
+    if (words[i] === "--port") ports.push(checkPort(words[++i] ?? die("--port needs a value")));
+    else rest.push(words[i]);
+  }
+  const spec = await specOf(rest.join(" "));
+  return ports.length ? { ...spec, ports } : spec;
+}
+
+async function specOf(line: string): Promise<RepoSpec & { name?: string }> {
   const words = line.trim().split(/\s+/).filter(Boolean);
   if (words.length === 0) die("nothing to add");
   let branch: string | undefined, name: string | undefined;
@@ -322,7 +344,7 @@ export function splitRepoSpecs(line: string): string[] {
   const groups: string[][] = [];
   for (let i = 0; i < words.length; i++) {
     const w = words[i];
-    if (w === "--branch" || w === "-b" || w === "--name") {
+    if (w === "--branch" || w === "-b" || w === "--name" || w === "--port") {
       if (!groups.length) die(`${w} before any repo`);
       groups[groups.length - 1].push(w, words[++i] ?? die(`${w} needs a value`));
     } else groups.push([w]);
@@ -331,14 +353,15 @@ export function splitRepoSpecs(line: string): string[] {
 }
 
 // Add every spec on the line, in order; stops at the first failure.
-export async function addRepos(name: string, line: string, o: { role?: Role; model?: string | null; log?: (s: string) => void; takeover?: boolean } = {}): Promise<Peer[]> {
+export async function addRepos(name: string, line: string, o: { role?: Role; model?: string | null; log?: (s: string) => void; takeover?: boolean; ports?: string[] } = {}): Promise<Peer[]> {
+  o.ports?.forEach(checkPort);
   const added: Peer[] = [];
   for (const spec of splitRepoSpecs(line)) added.push(await addRepo(name, spec, { ...o, role: added.length ? undefined : o.role }));
   return added;
 }
 
 // Resolve the spec into a directory under the project tree, cloning if needed, then register it.
-export async function addRepo(name: string, line: string, o: { role?: Role; model?: string | null; log?: (s: string) => void; takeover?: boolean } = {}): Promise<Peer> {
+export async function addRepo(name: string, line: string, o: { role?: Role; model?: string | null; log?: (s: string) => void; takeover?: boolean; ports?: string[] } = {}): Promise<Peer> {
   const p = load(name);
   const spec = await parseRepoSpec(line);
   const repo = spec.name ?? (spec.kind === "path" ? spec.repo : spec.repo.split("/")[1].replace(/\.git$/, ""));
@@ -370,7 +393,8 @@ export async function addRepo(name: string, line: string, o: { role?: Role; mode
     if (failed) die(`clone failed: ${failed}`);
     path = slot;
   }
-  return await addPeer(name, path, { role: o.role, model: o.model, repo, takeover: o.takeover, ...(spec.kind === "clone" ? { origin: spec.repo, branch: spec.branch } : {}) });
+  const ports = [...new Set([...(spec.ports ?? []), ...(o.ports ?? [])])];
+  return await addPeer(name, path, { role: o.role, model: o.model, repo, takeover: o.takeover, ports, ...(spec.kind === "clone" ? { origin: spec.repo, branch: spec.branch } : {}) });
 }
 
 // Removed means gone from disk: a clone of the project's is deleted (a repo linked from elsewhere
@@ -384,13 +408,15 @@ export async function rmPeer(name: string, repo: string, o: { force?: boolean; w
     const why = await losses(slot);
     if (why.length) die(`${repo}: ${why.join(", ")}; --force deletes it anyway`);
   }
+  if (isClone) peer.branch = (await branchOf(slot)) ?? peer.branch;
   p.peers = p.peers.filter((x) => x.repo !== repo);
   // Remembered so it can come back (readd) with the same path and conversation.
   p.removed = [...(p.removed ?? []).filter((x) => x.repo !== repo), { ...peer, when: Date.now() }].slice(-20);
   clearAttention(name, repo);
   if (p.lead === repo) p.lead = null;
   save(p);
-  void syncGroup(p).then(() => tellGroup(p, `${repo} left the project; its session is gone.`));
+  await syncGroupNow(name);
+  await tellGroup(p, `${repo} left the project; its session is gone.`);
   await refreshStatus(p);
   // Its pane (and the claude in it) goes too: the peer is no longer part of the project.
   if (await tmux.sessionUp(name)) {
@@ -561,6 +587,7 @@ export async function deleteProject(name: string, force = false): Promise<{ reco
     const lost = await projectLosses(name);
     if (lost.length) die(`${name} would lose: ${lost.map((x) => `${x.repo}: ${x.why.join(", ")}`).join("; ")}; --force deletes it anyway`);
   }
+  await keepBranches(name);
   await tmux.killSession(name);
   const dirs = [...clonesOf(name), ".my-claude"].map((d) => join(PROJECTS, name, d)).filter((d) => existsSync(d));
   const done = Promise.all(dirs.map((d) => discard(d))).then((r) => r.filter((x): x is string => !!x));
@@ -569,9 +596,35 @@ export async function deleteProject(name: string, force = false): Promise<{ reco
   return { record, done };
 }
 
+// The branch each clone is on goes into the record, so undelete clones that one again.
+async function keepBranches(name: string): Promise<void> {
+  const p = load(name);
+  for (const peer of p.peers) if (peer.path.startsWith(join(PROJECTS, name) + "/")) peer.branch = (await branchOf(peer.path)) ?? peer.branch;
+  save(p);
+}
+
+async function branchOf(path: string): Promise<string | null> {
+  if (!existsSync(join(path, ".git"))) return null;
+  return (await sh("git", ["-C", path, "branch", "--show-current"], { ok: true })).trim() || null;
+}
+
+// Cloned again on its branch; one the remote no longer has (never pushed): its default branch.
+async function reclone(peer: Peer, log?: (s: string) => void): Promise<{ failed: string | null; note?: string }> {
+  log?.(`cloning ${peer.origin}${peer.branch ? "#" + peer.branch : ""} -> ${peer.path}...`);
+  const failed = await clone(peer.origin!, peer.path, peer.branch);
+  if (!failed || !peer.branch || await clone(peer.origin!, peer.path)) return { failed };
+  return { failed: null, note: `${peer.repo}: ${peer.branch} is not on ${peer.origin}, so it is on the default branch` };
+}
+
+// Where a clone is made before it is moved into place whole: a start meanwhile finds no
+// half-made checkout (and `up` says why it waits).
+export const cloningPath = (path: string) => `${path}.cloning`;
+
 // owner/name: gh when logged in (private repos, the user's protocol), else git over https
 // (public, no login), else ssh (your key); any other URL: git. Null when cloned, else why not.
-async function clone(origin: string, path: string, branch?: string): Promise<string | null> {
+async function clone(origin: string, dest: string, branch?: string): Promise<string | null> {
+  const path = cloningPath(dest);
+  rmSync(path, { recursive: true, force: true }); // left by a clone that died
   const run = async (argv: string[]): Promise<string | null> => {
     try {
       const key = String(config().clone?.sshKey ?? "").replace(/^~/, homedir());
@@ -584,16 +637,18 @@ async function clone(origin: string, path: string, branch?: string): Promise<str
     }
   };
   const git = (url: string) => run(["git", "clone", ...(branch ? ["--branch", branch] : []), url, path]);
-  if (!/^[\w.-]+\/[\w.-]+$/.test(origin)) return git(origin);
   const tries: (() => Promise<string | null>)[] = [];
-  if (Bun.which("gh") && (await shOk("gh", ["auth", "status"]))) {
-    tries.push(() => run(["gh", "repo", "clone", origin, path, ...(branch ? ["--", "--branch", branch] : [])]));
+  if (!/^[\w.-]+\/[\w.-]+$/.test(origin)) tries.push(() => git(origin));
+  else {
+    if (Bun.which("gh") && (await shOk("gh", ["auth", "status"]))) {
+      tries.push(() => run(["gh", "repo", "clone", origin, path, ...(branch ? ["--", "--branch", branch] : [])]));
+    }
+    tries.push(() => git(`https://github.com/${origin}.git`), () => git(`git@github.com:${origin}.git`));
   }
-  tries.push(() => git(`https://github.com/${origin}.git`), () => git(`git@github.com:${origin}.git`));
   let why: string | null = "no way to clone";
   for (const t of tries) {
     why = await t();
-    if (!why) return null;
+    if (!why) { renameSync(path, dest); return null; }
     rmSync(path, { recursive: true, force: true }); // a half-made clone must not stop the next try
   }
   return why;
@@ -609,9 +664,9 @@ export async function readd(name: string, repo: string, log?: (s: string) => voi
   { const o = ownerOf(r.path, name); if (o) die(ownedMsg(r.path, o)); }
   if (!existsSync(r.path)) {
     if (!r.origin) die(`${r.path} is gone and ${repo} has no origin to clone from`);
-    log?.(`cloning ${r.origin}${r.branch ? "#" + r.branch : ""} -> ${r.path}...`);
-    const failed = await clone(r.origin, r.path, r.branch);
+    const { failed, note } = await reclone(r, log);
     if (failed) die(`clone of ${r.origin} failed: ${failed}`);
+    if (note) { log?.(note); r.branch = undefined; }
   }
   const slot = join(PROJECTS, name, repo);
   const st = lstatSync(slot, { throwIfNoEntry: false });
@@ -623,13 +678,14 @@ export async function readd(name: string, repo: string, log?: (s: string) => voi
   p.removed = (p.removed ?? []).filter((x) => x.repo !== repo);
   save(p);
   if (await tmux.sessionUp(name)) await bring(p, peer, false);
-  void syncGroup(p).then(() => tellGroup(p, `${repo} is back in the project at ${peer.path}, same conversation as before.`));
+  await syncGroupNow(name);
+  await tellGroup(p, `${repo} is back in the project at ${peer.path}, same conversation as before.`);
   return peer;
 }
 
-export async function undelete(which: string, log?: (s: string) => void): Promise<{ name: string; recloned: string[]; missing: string[]; leftOut: string[] }> {
+export async function undelete(which: string, log?: (s: string) => void): Promise<{ name: string; recloned: string[]; missing: string[]; leftOut: string[]; notes: string[] }> {
   const p = restore(which);
-  const recloned: string[] = [], missing: string[] = [], leftOut: string[] = [];
+  const recloned: string[] = [], missing: string[] = [], leftOut: string[] = [], notes: string[] = [];
   const taken = p.peers.filter((x) => ownerOf(x.path, p.name));
   if (taken.length) {
     for (const x of taken) { const o = ownerOf(x.path, p.name)!; leftOut.push(`${x.repo}: ${o.project} has its folder (${o.repo}); to move it here, remove it there and Re-add it`); }
@@ -638,14 +694,14 @@ export async function undelete(which: string, log?: (s: string) => void): Promis
   for (const peer of p.peers.filter((x) => !taken.includes(x))) {
     if (existsSync(peer.path)) continue;
     if (peer.origin && peer.path.startsWith(join(PROJECTS, p.name) + "/")) {
-      log?.(`cloning ${peer.origin}${peer.branch ? "#" + peer.branch : ""} -> ${peer.path}...`);
-      const failed = await clone(peer.origin, peer.path, peer.branch);
+      const { failed, note } = await reclone(peer, log);
+      if (note) notes.push(note);
       if (!failed) { recloned.push(peer.repo); trustPath(peer.path); continue; }
       log?.(`clone of ${peer.origin} failed: ${failed}`);
     }
     missing.push(`${peer.repo} (${peer.path})`);
   }
-  return { name: p.name, recloned, missing, leftOut };
+  return { name: p.name, recloned, missing, leftOut, notes };
 }
 
 // A whole project in one go, as the MCP tool does it: create, add repos, lead with the
@@ -751,6 +807,7 @@ export async function up(name: string, o: { takeover?: boolean } = {}): Promise<
     const st = await peerState(p, peer);
     const owner = st === "live" || st === "starting" ? null : ownerOf(peer.path, p.name);
     if (owner) report.push({ repo: peer.repo, action: "skipped", detail: ownedMsg(peer.path, owner) });
+    else if (!existsSync(peer.path) && existsSync(cloningPath(peer.path))) report.push({ repo: peer.repo, action: "skipped", detail: "still being cloned" });
     else if (st === "live" || st === "starting") report.push({ repo: peer.repo, action: st });
     else if (st === "idle") {
       await relaunchInPane(p, peer, (await tmux.paneOf(name, peer.repo))!);
@@ -778,7 +835,7 @@ export async function up(name: string, o: { takeover?: boolean } = {}): Promise<
     await tmux.killPane(s.id);
     report.push({ repo: s.title, action: "closed", detail: "no longer a peer" });
   }
-  void syncGroup(p);
+  await syncGroupNow(name);
   return report;
 }
 
@@ -996,6 +1053,32 @@ export async function openShell(name: string, repo: string, where: "env" | "host
 // What a pane is: its project, what it is called, and whether it is a peer's own pane
 // (untagged, docked, titled with a peer's repo) rather than a shell, the chat or a float.
 export interface PaneFacts { name: string | null; title: string; rawTitle: string; role: string; floating: boolean; peer: boolean }
+// What a shell pane runs besides its shell: the program's name, or null while only the shell is
+// there. A container shell shows here as its docker client; the container shares this machine's
+// processes, so its shell is found by the pane it was tagged with (MY_CLAUDE_PANE) and its
+// children read. "?" when that cannot be seen (a shell opened before panes were tagged).
+export async function paneBusy(pane: string): Promise<string | null> {
+  const cmd = (await sh("tmux", ["display-message", "-p", "-t", pane, "#{pane_current_command}"], { ok: true })).trim();
+  if (!cmd || /^-?(ba|z|fi|k|tc|c|da)?sh$/.test(cmd)) return null;
+  if (cmd !== "docker") return cmd;
+  const procs = await Promise.all((await readdir("/proc")).filter((d) => /^\d+$/.test(d)).map(async (pid) => {
+    try {
+      const stat = await Bun.file(`/proc/${pid}/stat`).text();
+      const comm = stat.slice(stat.indexOf("(") + 1, stat.lastIndexOf(")"));
+      const ppid = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]);
+      const env = await Bun.file(`/proc/${pid}/environ`).text().catch(() => "");
+      return { pid: Number(pid), ppid, comm, mine: env.split("\0").includes(`MY_CLAUDE_PANE=${pane}`) };
+    } catch {
+      return null;
+    }
+  }));
+  const all = procs.filter((p): p is NonNullable<typeof p> => !!p);
+  const tagged = new Set(all.filter((p) => p.mine).map((p) => p.pid));
+  const shell = all.find((p) => p.mine && !tagged.has(p.ppid));
+  if (!shell) return "?";
+  return all.find((p) => p.ppid === shell.pid)?.comm ?? null;
+}
+
 export async function paneFacts(id: string): Promise<PaneFacts> {
   const s = await sh("tmux", ["display-message", "-p", ...(id ? ["-t", id] : []), [tmux.PROJ, "#{@mc_role}", "#{pane_floating_flag}", "#{pane_title}"].join(tmux.SEP)], { ok: true });
   const [sess = "", role = "", fl = "0", ...t] = s.split(tmux.SEP);
@@ -1116,6 +1199,8 @@ export function shellPane(name: string, repo: string, host = false): number {
     return spawnSync(hostShell().shell, hostShell().args, { stdio: "inherit", cwd: peer.path, env: { ...process.env, MY_CLAUDE_PROJECT: name, MY_CLAUDE_PEER: repo } }).status ?? 1;
   }
   console.log(`my-claude: shell in ${name}/${repo} (container ${container.slice(0, 12)})  ${where}`);
+  // for a profile to tag the container's shell with: closing the pane looks for it (paneBusy)
+  process.env.MY_CLAUDE_PANE = process.env.TMUX_PANE ?? "";
   return prof.shellInto(container, peer.path);
 }
 
@@ -1172,6 +1257,16 @@ export function launch(name: string, repo: string): number {
   }
 }
 
+// What a profile is handed to start a peer. A shared container serves every peer, so it
+// forwards all their ports.
+export function launchCtx(name: string, repo: string): LaunchCtx {
+  const p = load(name);
+  const peer = peerOf(p, repo);
+  const args = claudeArgs(name, peer);
+  const ports = p.mode === "shared" ? [...new Set(p.peers.flatMap((x) => x.ports ?? []))] : peer.ports ?? [];
+  return { project: name, repo, path: peer.path, session: peer.session, mode: p.mode, container: tmux.sess(name), args, cmdline: claudeLine(name, peer, args), ports };
+}
+
 function launchOnce(name: string, repo: string): number {
   const p = load(name);
   const peer = peerOf(p, repo);
@@ -1180,8 +1275,8 @@ function launchOnce(name: string, repo: string): number {
   // Trusted again right before claude starts: the mark made when the repo was added can be
   // lost, since every running Claude rewrites ~/.claude.json from its own copy.
   trustPath(peer.path);
-  const args = claudeArgs(name, peer);
-  const ctx = { project: name, repo, path: peer.path, session: peer.session, mode: p.mode, container: tmux.sess(name), args, cmdline: claudeLine(name, peer, args) };
+  const ctx = launchCtx(name, repo);
+  const args = ctx.args;
   console.log(`my-claude: ${name}/${repo}  ${args[0] === "--resume" ? "resuming" : "new conversation"} ${peer.session.slice(0, 8)}  profile ${p.profile}${p.mode === "shared" ? " (shared container)" : ""}`);
   let rc: number;
   if (p.mode === "shared" && p.peers.indexOf(peer) !== 0) {

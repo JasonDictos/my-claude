@@ -18,6 +18,7 @@ export interface Peer {
   session: string;
   origin?: string; // "org/repo" when my-claude cloned it: enough to clone it again after undelete
   branch?: string;
+  ports?: string[]; // forwarded from this machine into its container (docker -p forms)
   kickoff?: string; // first prompt, sent once when the conversation is new (a work order)
   label?: string; // what the window calls it, when the user renamed it
 }

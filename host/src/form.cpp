@@ -28,6 +28,21 @@
 #include <QTreeWidget>
 #include <QVBoxLayout>
 
+// The row Enter ticks in a picker: the name as typed, else one starting with it, else the first
+// shown. The search also matches descriptions, so the first row shown can be another repo.
+static QTreeWidgetItem* bestMatch(QTreeWidget* tw, const QString& typed) {
+  const QString q = typed.trimmed();
+  QTreeWidgetItem *starts = nullptr, *first = nullptr;
+  for (int k = 0; k < tw->topLevelItemCount(); ++k) {
+    QTreeWidgetItem* it = tw->topLevelItem(k);
+    if (it->isHidden()) continue;
+    if (!q.isEmpty() && it->text(0).compare(q, Qt::CaseInsensitive) == 0) return it;
+    if (!starts && !q.isEmpty() && it->text(0).startsWith(q, Qt::CaseInsensitive)) starts = it;
+    if (!first) first = it;
+  }
+  return starts ? starts : first;
+}
+
 FormDialog::FormDialog(const QJsonObject& spec, QWidget* parent) : QDialog(parent) {
   const QJsonObject schema = spec.value("schema").toObject();
   setWindowTitle(spec.value("title").toString(schema.value("title").toString("my-claude")));
@@ -62,7 +77,7 @@ FormDialog::FormDialog(const QJsonObject& spec, QWidget* parent) : QDialog(paren
   connect(buttons, &QDialogButtonBox::accepted, this, &FormDialog::accept);
   connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
   outer->addWidget(buttons);
-  if (!fields_.isEmpty()) fields_.first().widget->setFocus();
+  if (!fields_.isEmpty()) (fields_.first().focus ? fields_.first().focus : fields_.first().widget)->setFocus();
   else ok->setFocus();
 }
 
@@ -169,12 +184,12 @@ void FormDialog::addFields(QFormLayout* form, const QJsonObject& schema, const Q
           tw->topLevelItem(k)->setHidden(!hit);
         }
         recount();
+        if (QTreeWidgetItem* it = bestMatch(tw, q)) { tw->setCurrentItem(it); tw->scrollToItem(it); } // what Enter will tick
       });
       connect(tw, &QTreeWidget::itemChanged, tw, [recount](QTreeWidgetItem*, int) { recount(); });
       connect(tw, &QTreeWidget::itemDoubleClicked, tw, [](QTreeWidgetItem* it, int) { it->setCheckState(0, it->checkState(0) == Qt::Checked ? Qt::Unchecked : Qt::Checked); });
-      // Enter in the search box ticks the first match
-      connect(search, &QLineEdit::returnPressed, tw, [tw] {
-        for (int k = 0; k < tw->topLevelItemCount(); ++k) if (!tw->topLevelItem(k)->isHidden()) { tw->topLevelItem(k)->setCheckState(0, Qt::Checked); break; }
+      connect(search, &QLineEdit::returnPressed, tw, [tw, search] {
+        if (QTreeWidgetItem* it = bestMatch(tw, search->text())) it->setCheckState(0, Qt::Checked);
       });
       tw->setMinimumHeight(320);
       tw->setMinimumWidth(640);
@@ -183,8 +198,8 @@ void FormDialog::addFields(QFormLayout* form, const QJsonObject& schema, const Q
       v->addWidget(count);
       recount();
       f.widget = tw;
+      f.focus = search; // typing a repo's name finds it
       row = box;
-      search->setFocus();
     } else if (p.contains("enum") && format == "table") {
       // one choice from rows with columns (`columns` the headers, `enumRows` a row per choice)
       auto* tw = new QTreeWidget(this);

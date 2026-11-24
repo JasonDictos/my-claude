@@ -332,7 +332,7 @@ function App() {
       }
       else if (input === "x" && cur) {
         const clones = core.clonesOf(cur.name);
-        setPrompt({ kind: "confirm", label: clones.length ? `Delete ${cur.name} and move its clones (${clones.join(", ")}) to .trash?` : `Delete project ${cur.name} (conversations stay on disk)?`, onYes: () => act(async () => { const d = await core.deleteProject(cur.name, true); setMsg(`moved to ${tilde(d)}`); }) });
+        setPrompt({ kind: "confirm", label: clones.length ? `Delete ${cur.name} and move its clones (${clones.join(", ")}) to .trash?` : `Delete project ${cur.name} (conversations stay on disk)?`, onYes: () => act(async () => { const { record } = await core.deleteProject(cur.name, true); setMsg(`deleted; its record is in ${tilde(record)} for undelete`); }) });
       }
       else {
         const a = ACTIONS.find((x) => x.key === input);

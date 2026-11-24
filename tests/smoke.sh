@@ -36,10 +36,15 @@ rm -rf "$MY_CLAUDE_ROOT/projects/hk"
 # words higher up, in what it wrote, are not its footer.
 tmux new-session -d -s busytest -x 120 -y 20 "printf 'said esc to interrupt before\n\n> \n  bypass permissions on · esc to interrupt\n'; sleep 600"
 tmux new-window -d -t busytest "printf 'I mention esc to interrupt here\nmore\nlines\n\n> \n  bypass permissions on (shift+tab to cycle)\n'; sleep 600"
+# a crowded footer leaves "esc to interrupt" out: the spinner line above the input box says it
+tmux new-window -d -t busytest "printf '  44    SECTION(\\\"unknown\\\") {\n* Unraveling… (1m 9s · ↓ 7.2k tokens · thinking with xhigh effort)\n   ◎ /goal active (16h)\n──────\n❯ \n──────\n  ~/webapp · Opus 5.5 [docker]\n  bypass permissions on (shift+tab to cycle) · PR #123 · 2 feedback drafts\n'; sleep 600"
+# and a finished turn's summary is no spinner
+tmux new-window -d -t busytest "printf '✻ Worked for 1m 2s\n──────\n❯ \n──────\n  ~/x · Opus 5.5\n  bypass permissions on (shift+tab to cycle)\n'; sleep 600"
 sleep 0.5
 mapfile -t bp < <(tmux list-panes -s -t =busytest -F '#{pane_id}')
-busy=$(bun -e 'const t = await import(process.argv[1]); console.log([...await t.busy(process.argv.slice(2))].join(","));' "$MY_CLAUDE_ROOT/src/tmux.ts" "${bp[@]}")
-[ "$busy" = "${bp[0]}" ] || fail "busy panes: '$busy', want only ${bp[0]} (of ${bp[*]})"
+busy=$(bun -e 'const t = await import(process.argv[1]); console.log([...await t.busy(process.argv.slice(2))].sort().join(","));' "$MY_CLAUDE_ROOT/src/tmux.ts" "${bp[@]}")
+want=$(printf '%s\n' "${bp[0]}" "${bp[2]}" | sort | paste -sd,)
+[ "$busy" = "$want" ] || fail "busy panes: '$busy', want $want (of ${bp[*]}: footer, mention, spinner, finished)"
 tmux kill-session -t =busytest
 panes() { tmux list-panes -s -t mc-smoke -F '#{pane_title}' | grep -v '^my-claude-panel$' | sort | tr '\n' ' '; }
 panel() { tmux list-panes -t mc-smoke:1 -F '#{pane_title} #{pane_left} #{pane_width}' | grep '^my-claude-panel '; }
@@ -195,6 +200,8 @@ printf 'hello all\n' | mc _chat smoke >/dev/null
 grep -q '^group mc-smoke .* tester$' "$FAKE_PEERS_LOG" || fail "chat should add tester to the group: $(cat "$FAKE_PEERS_LOG")"
 grep -q '^broadcast mc-smoke .*tester (the user) joined' "$FAKE_PEERS_LOG" || fail "chat should announce the join"
 grep -q '^chat mc-smoke --name tester --cwd ' "$FAKE_PEERS_LOG" || fail "chat should run the peers chat"
+grep -q '^broadcast my-claude-app$' "$FAKE_PEERS_LOG.from" || fail "my-claude's notes should be signed by my-claude itself, not the session it runs under: $(cat "$FAKE_PEERS_LOG.from")"
+grep -q '^chat -$' "$FAKE_PEERS_LOG.from" || fail "the user's chat speaks as the user"
 grep -q '^send mc-smoke hello all$' "$FAKE_PEERS_LOG" || fail "typed line should reach the group"
 tail -1 "$FAKE_PEERS_LOG" | grep -q '^group mc-smoke ' && ! tail -1 "$FAKE_PEERS_LOG" | grep -q ' tester$' || fail "leaving should drop tester from the group: $(tail -1 "$FAKE_PEERS_LOG")"
 [ -e "$MY_CLAUDE_ROOT/projects/smoke/.my-claude/chat.json" ] && fail "chat marker left behind"
@@ -212,6 +219,18 @@ mc restart smoke r2 >/dev/null || fail "restart r2 with a Claude on another conv
 kill -0 "$other" 2>/dev/null || fail "restart stopped a Claude on another conversation in r2's folder"
 [ "$(mc status smoke --json | jq -r '.peers[]|select(.repo=="r2").state')" = live ] || fail "r2 not live after restart: $(mc status smoke | grep '^r2 ')"
 pkill -P "$other"; kill "$other"
+# A repo added is in the project's group and the group told, before the command is done; also
+# from the compiled binary (what a peer's MCP server runs in a container).
+mkdir -p "$tmp/r9" "$tmp/r10"; : > "$FAKE_PEERS_LOG"
+mc add smoke "$tmp/r9" >/dev/null
+grep -q "^group mc-smoke .*$tmp/r9" "$FAKE_PEERS_LOG" || fail "adding r9 should put it in the group: $(cat "$FAKE_PEERS_LOG")"
+grep -q '^broadcast mc-smoke .*r9 joined' "$FAKE_PEERS_LOG" || fail "adding r9 should tell the group: $(cat "$FAKE_PEERS_LOG")"
+bun build --compile "$here/../src/cli.ts" --outfile "$tmp/mc-bin" >/dev/null
+: > "$FAKE_PEERS_LOG"
+"$tmp/mc-bin" add smoke "$tmp/r10" >/dev/null
+grep -q "^group mc-smoke .*$tmp/r10" "$FAKE_PEERS_LOG" || fail "the compiled binary should put r10 in the group too: $(cat "$FAKE_PEERS_LOG")"
+grep -q '^broadcast mc-smoke .*r10 joined' "$FAKE_PEERS_LOG" || fail "the compiled binary should tell the group too: $(cat "$FAKE_PEERS_LOG")"
+mc rm smoke r9 >/dev/null; mc rm smoke r10 >/dev/null
 echo '{"profile":"host","peers":{"cli":"/nonexistent/claude-peers-cli"}}' > "$MY_CLAUDE_ROOT/config.json"
 mc rm smoke r5 >/dev/null
 cp "$MY_CLAUDE_ROOT/projects/smoke/project.json" "$tmp/smoke.json"
@@ -267,4 +286,37 @@ mc delete del --force >/dev/null || fail "delete --force"
 [ -e "$MY_CLAUDE_ROOT/projects/del" ] && fail "the project is still on disk"
 [ -n "$(find "$MY_CLAUDE_ROOT/.trash" -path '*-del/project.json' 2>/dev/null)" ] || fail "the project's record should stay for undelete"
 [ -n "$(find "$MY_CLAUDE_ROOT/.trash" -path '*-del/origin' 2>/dev/null)" ] && fail "a clone went to the trash instead of off the disk"
+# undelete clones each repo again on the branch it was on; one the remote lacks: its default, said so
+mc undelete del >/dev/null || fail "undelete del"
+git -C "$clone" checkout -q topic
+mc delete del >/dev/null || fail "delete a clean clone on a pushed branch"
+mc undelete del >/dev/null || fail "undelete del on topic"
+[ "$(git -C "$clone" branch --show-current)" = topic ] || fail "undelete should clone the branch it was on, not $(git -C "$clone" branch --show-current)"
+git -C "$clone" checkout -q -b never-pushed
+mc delete del >/dev/null || fail "delete a clone on an empty local branch"
+out=$(mc undelete del 2>&1) || fail "undelete with a branch the remote lacks: $out"
+[ "$(git -C "$clone" branch --show-current)" = main ] || fail "a branch the remote lacks: the default branch"
+echo "$out" | grep -q "never-pushed" || fail "should say the branch was not there: $out"
+# a clone is made beside its folder and moved in whole: a start meanwhile never finds half a checkout
+mc delete del >/dev/null || fail "delete del again"
+mkdir -p "$tmp/gitwrap"
+printf '#!/bin/sh\nfor a; do last=$a; done\n[ "$1" = clone ] && echo "$last" >> %s\nexec %s "$@"\n' "$tmp/clone-dests" "$(command -v git)" > "$tmp/gitwrap/git"
+chmod +x "$tmp/gitwrap/git"
+PATH="$tmp/gitwrap:$PATH" mc undelete del >/dev/null || fail "undelete del through the git wrapper"
+[ "$(cat "$tmp/clone-dests")" = "$clone.cloning" ] || fail "the clone should be made at $clone.cloning, not $(cat "$tmp/clone-dests")"
+[ -d "$clone/.git" ] && [ ! -e "$clone.cloning" ] || fail "the clone should be moved into $clone when done"
+# and a repo still being cloned is not started
+mc delete del >/dev/null; mc undelete del >/dev/null
+mv "$clone" "$clone.cloning"
+out=$(mc up del --no-attach 2>&1) && fail "started a repo still being cloned: $out"
+echo "$out" | grep -q "origin: still being cloned" || fail "should say the repo is still being cloned: $out"
+mv "$clone.cloning" "$clone"
+# forwarded ports travel with the repo they follow and reach the profile at launch
+mkdir -p "$tmp/srv" "$tmp/srv2"; mc new ports >/dev/null
+mc add ports "$tmp/srv" --port 20808 --port 8080:80 >/dev/null || fail "add with --port"
+[ "$(mc status ports --json | jq -c '.peers[]|select(.repo=="srv").ports')" = '["20808","8080:80"]' ] || fail "the ports should be kept on the repo"
+out=$(mc add ports "$tmp/srv2" --port http 2>&1) && fail "a bad port was taken: $out"
+echo "$out" | grep -q "http" || fail "should name the bad port: $out"
+[ "$(bun -e 'const c = await import(process.argv[1]); console.log(c.launchCtx("ports", "srv").ports.join(" "))' "$MY_CLAUDE_ROOT/src/core.ts")" = "20808 8080:80" ] || fail "the profile should get the ports"
+mc delete ports >/dev/null
 echo "smoke OK"
