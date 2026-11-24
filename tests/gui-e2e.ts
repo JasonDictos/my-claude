@@ -149,6 +149,11 @@ if (r1.node !== "r:demo/r1") fail("pane should point at its sidebar entry", r1);
   await u.shows("r1's folder opened", (x) => x.opened === `file://${r1path}`);
   u.act("project.files", { node: "p:demo" });
   await u.shows("the project's folder opened", (x) => x.opened === `file://${join(root, "projects", "demo")}`);
+  // Copy path: the same folders, onto the clipboard (to cd there from a console)
+  u.act("peer.copypath", { node: "r:demo/r1" });
+  await u.shows("r1's path copied", (x) => x.clipboard === r1path);
+  u.act("project.copypath", { node: "p:demo" });
+  await u.shows("the project's path copied", (x) => x.clipboard === join(root, "projects", "demo"));
   // in the list its key is Ctrl+F; a bare f is the list's type-to-find
   u.send({ op: "focus", id: r1.id });
   await u.shows("r1 with the keyboard", (x) => x.terminals.find((t: any) => t.id === r1.id)?.active === true);

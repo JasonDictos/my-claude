@@ -1110,6 +1110,11 @@ void Host::handle(const QJsonObject& m, QLocalSocket* from) {
     if (m.value("open").toBool()) openSettings();
     return;
   }
+  if (op == "copy") { // text onto the clipboard, said in the status bar
+    QGuiApplication::clipboard()->setText(m.value("text").toString());
+    statusBar()->showMessage("copied " + m.value("text").toString(), 4000);
+    return;
+  }
   if (op == "browse") {
     // a folder in the desktop's file manager; another machine's over sftp (KIO, gvfs)
     QUrl url = QUrl::fromLocalFile(m.value("path").toString());
@@ -1285,7 +1290,7 @@ void Host::handle(const QJsonObject& m, QLocalSocket* from) {
     const Tab* cur = currentTab();
     reply(from, {{"ev", "list"}, {"terminals", terms}, {"tabs", tabNames}, {"current", cur ? cur->name : QString()}, {"consoles", docks}, {"nodes", nodes}, {"toolbar", tools}, {"overview", overview_ != nullptr},
                  {"asks", asks}, {"preview", preview_ && preview_->isVisible() ? previewId_ : QString()}, {"actions", acts}, {"selected", currentNode()}, {"sidebar", dock_->isVisible()}, {"driver", driver_ != nullptr},
-                 {"shown", isVisible() && !(windowState() & Qt::WindowMinimized)}, {"fullScreen", isFullScreen()}, {"keyBar", keyBar_ && keyBar_->isVisible()}, {"menuBar", menuBar()->isVisible()}, {"badges", int(badges_.size())}, {"keyBarText", keyBar_ ? keyBar_->text() : QString()}, {"activeWindow", isActiveWindow()}, {"opened", lastOpened_},
+                 {"shown", isVisible() && !(windowState() & Qt::WindowMinimized)}, {"fullScreen", isFullScreen()}, {"keyBar", keyBar_ && keyBar_->isVisible()}, {"menuBar", menuBar()->isVisible()}, {"badges", int(badges_.size())}, {"keyBarText", keyBar_ ? keyBar_->text() : QString()}, {"activeWindow", isActiveWindow()}, {"opened", lastOpened_}, {"clipboard", qEnvironmentVariableIsSet("MC_TERM_TEST") ? QGuiApplication::clipboard()->text() : QString()},
                  // where an open dialog puts the keyboard once it has it
                  {"dialogsShown", [] { int n = 0; for (QWidget* w : QApplication::topLevelWidgets()) n += qobject_cast<QDialog*>(w) && w->isVisible(); return n; }()}, {"askFocus", [&] { for (FormDialog* d : asks_) if (d && d->focusWidget()) return QString(d->focusWidget()->metaObject()->className()); return QString(); }()}});
     return;

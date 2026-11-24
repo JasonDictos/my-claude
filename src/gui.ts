@@ -697,7 +697,7 @@ class Driver {
       ? [act("project.open", "Show", "", true), act("project.hide", "Close its tab", "h", this.shown.has(name)), sep,
          act("project.add", "Add repos…", "a"), act("project.chat", "Chat with the peers", "c"), act("project.brief", "Brief the peers again", "b", !!p.lead)]
       : [act("project.open", "Start", "u", p.peers.length > 0), sep, act("project.add", "Add repos…", "a")];
-    actions.push(act("project.files", "Open folder", "f"), act("project.ticket", "Ticket…", "t"), act("project.goal", "Goal…", "g"), act("project.color", "Color…"),
+    actions.push(act("project.files", "Open folder", "f"), act("project.copypath", "Copy path", "C"), act("project.ticket", "Ticket…", "t"), act("project.goal", "Goal…", "g"), act("project.color", "Color…"),
       act("project.readd", "Re-add a removed repo…", "U", (p.removed ?? []).length > 0), sep);
     if (s.up) actions.push(act("project.down", "Bring down…", "d"));
     actions.push(act("project.rename", "Rename… (F2)"), act("project.delete", "Delete project…", "x"));
@@ -712,7 +712,7 @@ class Driver {
       const pa: Dict[] = [act("peer.focus", peer.pane ? "Go to its pane" : "Start", "", s.up || p.peers.length > 0), sep,
         act("peer.shell", "Shell in its environment", "h", !!peer.pane), act("peer.hostshell", "Host shell in its checkout", "H", s.up),
         act("peer.restart", "Relaunch…", "R", s.up && peer.state !== "occupied"), act("peer.index", "Rebuild symbol index", "i"), sep,
-        act("peer.files", "Open folder", "f"), act("peer.lead", peer.repo === p.lead ? "Change the goal…" : "Make lead…", "l"), act("peer.model", "Model…", "m")];
+        act("peer.files", "Open folder", "f"), act("peer.copypath", "Copy path", "C"), act("peer.lead", peer.repo === p.lead ? "Change the goal…" : "Make lead…", "l"), act("peer.model", "Model…", "m")];
       if (peer.state === "occupied") pa.push(act("peer.takeover", "Take over (stop the session holding it)…"));
       pa.push(sep, act("peer.rename", "Rename… (F2)"), act("peer.remove", "Close…", "x"));
       const cloning = settingUp && !existsSync(peer.path);
@@ -1146,6 +1146,8 @@ class Driver {
       case "project.goal": return this.projectGoal(project());
       // the window opens it: it knows which machine the folder is on
       case "project.files": return this.send({ op: "browse", path: join(PROJECTS, project()) });
+      case "project.copypath": return this.send({ op: "copy", text: join(PROJECTS, project()) });
+      case "peer.copypath": { const repo = peer(); const at = this.snap(name)?.peers.find((x) => x.repo === repo)?.path; if (at) this.send({ op: "copy", text: at }); return; }
       case "peer.files": { const repo = peer(); const at = this.snap(name)?.peers.find((x) => x.repo === repo)?.path; if (at) this.send({ op: "browse", path: at }); return; }
       case "project.color": return this.projectColor(project());
       case "project.readd": return this.projectReadd(project());
