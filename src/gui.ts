@@ -5,6 +5,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, symlinkSync, writeFileSync, rmSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { stat } from "node:fs/promises";
 import * as core from "./core.ts";
 import * as tmux from "./tmux.ts";
 import * as consoles from "./consoles.ts";
@@ -986,6 +987,7 @@ class Driver {
         if (String(ev.id ?? "").startsWith(`${consoles.TAB}/`)) void this.consoleRename(String(ev.id).slice(consoles.TAB.length + 1), String(ev.name ?? "")).catch((e) => this.fail(e, "rename"));
         else void this.onRename(String(ev.node ?? ""), String(ev.name ?? "")).catch((e) => this.fail(e, "rename"));
         break;
+      case "open-path": void this.openPath(String(ev.id ?? ""), String(ev.path ?? "")).catch((e) => this.fail(e, "open")); break;
       case "settings": try { this.saveSettings(ev.values ?? {}); } catch (e) { this.fail(e, "settings"); } break;
       case "settings-open": this.send({ op: "settings", ...this.settingsSpec(), open: true }); break;
       case "quit": log("window closed"); this.flushPrefs(); this.releaseAll(); process.exit(0);
@@ -1068,6 +1070,19 @@ class Driver {
     }
     if (focus) { this.pendingFocus = focus; this.pendingFocusAge = 0; }
     this.show(name);
+  }
+
+  // A path Ctrl+clicked in a pane: from the pane's folder, else its repo's, opened on the desktop.
+  private async openPath(id: string, raw: string): Promise<void> {
+    const [name, pane] = split2(id);
+    const path = raw.replace(/:\d+(:\d+)?$/, "").replace(/^~(?=\/)/, homedir());
+    const here = (await sh("tmux", ["display-message", "-p", "-t", pane, "#{pane_current_path}"], { ok: true })).trim();
+    const repo = this.snap(name)?.peers.find((x) => x.repo === this.byPane(name, pane).repo)?.path;
+    for (const dir of [here, repo].filter((d): d is string => !!d)) {
+      const abs = resolve(dir, path);
+      if (await stat(abs).then(() => true, () => false)) { this.send({ op: "browse", path: abs }); return; }
+    }
+    this.notify(`no ${path} in ${tilde(here || homedir())}`, { error: true });
   }
 
   // A name typed over an entry (F2): its display name, the default again when emptied.

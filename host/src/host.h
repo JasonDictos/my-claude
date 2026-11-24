@@ -323,6 +323,12 @@ private:
   void consoleAction(const QString& a);
   void renameConsole(const QString& id);
   bool dockEvent(QObject* o, QEvent* e);
+  // paths in a pane: the one under the mouse underlined, Ctrl+click asks its driver to open it
+  bool pathEvent(QObject* o, QEvent* e);
+  QString pathUnder(const Term& t, QWidget* disp, const QPoint& at, QRect* where) const;
+  QWidget* displayOf(QTermWidget* w) const;
+  QPointer<QFrame> pathMark_;
+  QString pathMarkText_;
   QPoint dockGrab_;
   QString dockDragging_;
   bool dockMoved_ = false;

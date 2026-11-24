@@ -352,12 +352,95 @@ QJsonArray tagTree(const QJsonArray& nodes, const QString& tag, bool top) {
 
 void TermHook::onUrl(const QUrl& u, bool) { if (url) url(u); }
 
+namespace {
+// A pane's character cell, measured as qtermwidget's TerminalDisplay measures it (REPCHAR).
+QSize cellSize(const QFont& f) {
+  static const QString rep = QStringLiteral("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgjijklmnopqrstuvwxyz0123456789./+@");
+  const QFontMetrics fm(f);
+  return {qMax(1, qRound(double(fm.horizontalAdvance(rep)) / rep.size())), qMax(1, fm.height())};
+}
+// The path at column `col` of a pane's line, where it starts in *start; empty when there is
+// none. URLs are left to the terminal's own links. A :line[:col] suffix stays on it.
+QString pathToken(const QString& line, int col, int* start) {
+  auto ok = [](QChar c) { return c.isLetterOrNumber() || QStringLiteral("._-/~+@:").contains(c); };
+  if (col < 0 || col >= line.size() || !ok(line[col])) return {};
+  int a = col, b = col + 1;
+  while (a > 0 && ok(line[a - 1])) --a;
+  while (b < line.size() && ok(line[b])) ++b;
+  while (b > a && QStringLiteral(".:").contains(line[b - 1])) --b; // the sentence's, not the path's
+  while (a < b && line[a] == ':') ++a;
+  if (col >= b) return {};
+  const QString s = line.mid(a, b - a);
+  static const QRegularExpression lineRef(QStringLiteral(":\\d+(:\\d+)?$")), ext(QStringLiteral("\\.[A-Za-z][A-Za-z0-9]{0,7}$"));
+  const QString bare = QString(s).remove(lineRef);
+  if (bare.contains(':') || s.contains(QStringLiteral("//")) || bare.startsWith(QStringLiteral("www."))) return {};
+  if (!(bare.contains('/') && bare != "/") && !ext.match(bare).hasMatch()) return {};
+  *start = a;
+  return s;
+}
+} // namespace
+
 // A terminal link. Never an "email address": that pattern catches package@version far more
 // often than mail, and hands it to whatever the desktop opens mailto: with.
 void Host::openLink(const QUrl& url) {
   if (url.scheme() == "mailto") return;
   if (qEnvironmentVariableIsSet("MC_TERM_TEST")) lastOpened_ = url.toString();
   else QDesktopServices::openUrl(url);
+}
+
+// A pane's drawing surface: qtermwidget's TerminalDisplay, which takes its mouse events.
+QWidget* Host::displayOf(QTermWidget* w) const {
+  for (QWidget* c : w->findChildren<QWidget*>()) if (qstrcmp(c->metaObject()->className(), "Konsole::TerminalDisplay") == 0) return c;
+  return w;
+}
+
+// The path under a point of a pane's display, and the cells it covers in *where.
+QString Host::pathUnder(const Term& t, QWidget* disp, const QPoint& at, QRect* where) const {
+  if (!t.widget->selectedText(true).isEmpty()) return {}; // reading the line would take the user's selection
+  const QSize cell = cellSize(t.widget->getTerminalFont());
+  const int m = t.widget->getMargin();
+  if (at.x() < m || at.y() < m) return {};
+  const int line = (at.y() - m) / cell.height(), col = (at.x() - m) / cell.width();
+  if (line >= t.widget->screenLinesCount() || col >= t.widget->screenColumnsCount()) return {};
+  const auto* bar = disp->findChild<QScrollBar*>(); // scrolled back: its value is the top line shown
+  const int top = bar ? bar->value() : t.widget->historyLinesCount();
+  int start = 0;
+  const QString p = pathToken(screenRows(t, top + line, top + line).value(0), col, &start);
+  if (where && !p.isEmpty()) *where = QRect(m + start * cell.width(), m + line * cell.height(), int(p.size()) * cell.width(), cell.height());
+  return p;
+}
+
+// A path in a pane: underlined under the mouse; Ctrl+click (as with links) has its driver open
+// it, from the pane's folder.
+bool Host::pathEvent(QObject* o, QEvent* e) {
+  const QEvent::Type type = e->type();
+  if (type != QEvent::MouseMove && type != QEvent::MouseButtonPress && type != QEvent::Leave) return false;
+  if (qstrcmp(o->metaObject()->className(), "Konsole::TerminalDisplay") != 0) return false;
+  auto* disp = static_cast<QWidget*>(o);
+  if (type == QEvent::Leave) { if (pathMark_) pathMark_->hide(); return false; }
+  const QString id = termHolding(disp);
+  if (!terms_.contains(id)) return false;
+  auto* me = static_cast<QMouseEvent*>(e);
+  if (type == QEvent::MouseMove) {
+    QRect r;
+    pathMarkText_ = me->buttons() == Qt::NoButton ? pathUnder(terms_[id], disp, me->position().toPoint(), &r) : QString();
+    if (pathMarkText_.isEmpty()) { if (pathMark_) pathMark_->hide(); return false; }
+    if (!pathMark_) {
+      pathMark_ = new QFrame(disp);
+      pathMark_->setAttribute(Qt::WA_TransparentForMouseEvents);
+      pathMark_->setStyleSheet("background: #6cb6ff;");
+    }
+    if (pathMark_->parentWidget() != disp) pathMark_->setParent(disp);
+    pathMark_->setGeometry(r.left(), r.bottom(), r.width(), 1);
+    pathMark_->show();
+    pathMark_->raise();
+    return false;
+  }
+  if (me->button() != Qt::LeftButton || me->modifiers() != Qt::ControlModifier) return false;
+  const QString p = pathUnder(terms_[id], disp, me->position().toPoint(), nullptr);
+  if (p.isEmpty()) return false;
+  emitEvent({{"ev", "open-path"}, {"id", id}, {"path", p}});
+  return true; // the click opens it; no selection starts
 }
 
 void Header::mousePressEvent(QMouseEvent* e) {
@@ -781,7 +864,7 @@ void Host::reply(QLocalSocket* to, const QJsonObject& msg) {
 void Host::emitEvent(const QJsonObject& ev) {
   // What the user does while the driver is away (it is restarting) is kept for it: a
   // click must not vanish because it landed in that half second.
-  static const QSet<QString> user{"action", "activate", "select", "tab-close", "settings", "settings-open", "nudge", "rename"};
+  static const QSet<QString> user{"action", "activate", "select", "tab-close", "settings", "settings-open", "nudge", "rename", "open-path"};
   if (!driverSock_ && !driverCmd_.isEmpty() && user.contains(ev.value("ev").toString()) && held_.size() < 64) held_ << ev;
   const auto all = clients_; // a handler may drop a client while we write
   for (QLocalSocket* s : all) {
@@ -1102,6 +1185,17 @@ void Host::handle(const QJsonObject& m, QLocalSocket* from) {
     // pressing a key runs the event loop: from the main loop then, never inside this socket's read
     QPointer<QLocalSocket> asker = from;
     QTimer::singleShot(0, this, [this, asker, m] { pressKeys(m, asker); });
+    return;
+  }
+  if (op == "mouse" && qEnvironmentVariableIsSet("MC_TERM_TEST")) { // tests: the mouse on a cell of a pane's screen; "click": Ctrl+click
+    if (!terms_.contains(id)) { noTerm(); return; }
+    QTermWidget* w = terms_[id].widget;
+    QWidget* disp = displayOf(w);
+    const QSize cell = cellSize(w->getTerminalFont());
+    const QPoint at(w->getMargin() + m.value("col").toInt() * cell.width() + cell.width() / 2, w->getMargin() + m.value("row").toInt() * cell.height() + cell.height() / 2);
+    if (m.value("click").toBool()) QTest::mouseClick(disp, Qt::LeftButton, Qt::ControlModifier, at);
+    else QTest::mouseMove(disp, at);
+    reply(from, {{"ev", "moused"}, {"mark", pathMark_ && pathMark_->isVisible() ? pathMarkText_ : QString()}, {"hotspot", w->getHotSpotAt(at) != nullptr}});
     return;
   }
   if (op == "hover" && qEnvironmentVariableIsSet("MC_TERM_TEST")) { showPreview(nodeItems_.value(m.value("node").toString())); return; } // tests: the mouse rests on an entry
@@ -3081,6 +3175,7 @@ void Host::sidebarFocus() {
 bool Host::eventFilter(QObject* o, QEvent* e) {
   if (!userActed_ && (e->type() == QEvent::KeyPress || e->type() == QEvent::MouseButtonPress) && e->spontaneous()) userActed_ = true;
   if (dockEvent(o, e)) return true;
+  if (pathEvent(o, e)) return true;
   // typing means the eyes are elsewhere: the preview of the entry under the mouse goes
   if ((e->type() == QEvent::KeyPress || e->type() == QEvent::ShortcutOverride) && preview_ && preview_->isVisible()) hidePreview();
   // an entry with a live preview needs no tooltip as well: its details head the preview

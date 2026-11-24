@@ -293,6 +293,26 @@ run("host.console-pin");
 await u.shows("unpinned", (x) => dock(x).pinned === false);
 u.send({ op: "focus", id: c1.id });
 await u.shows("console1 with the keyboard", (x) => dock(x).visible && conOf(x, "console1")?.active === true);
+// paths in a pane: underlined under the mouse, Ctrl+click opens one from the pane's folder
+{
+  const plan = join(process.env.HOME!, "docs/plan.md");
+  mkdirSync(dirname(plan), { recursive: true }); writeFileSync(plan, "# plan\n");
+  u.send({ op: "send", id: c1.id, text: "clear; echo 'see docs/plan.md, docs/nope.md or https://example.com/x'\r" });
+  let row = -1, scr = "";
+  for (let i = 0; i < 60 && row < 0; i++) { scr = await screenOf(c1.id); row = scr.split("\n").findIndex((l) => l.startsWith("see docs/plan.md")); if (row < 0) await Bun.sleep(100); }
+  if (row < 0) fail("the paths should be on console1's screen", scr);
+  const line = scr.split("\n")[row];
+  const mouse = async (col: number, click = false) => { u.send({ op: "mouse", id: c1.id, row, col, click }); return u.until("moused"); };
+  let mo = await mouse(line.indexOf("plan.md"));
+  if (mo.mark !== "docs/plan.md") fail("a path under the mouse should be underlined", mo);
+  mo = await mouse(line.indexOf("example.com"));
+  if (!mo.hotspot || mo.mark) fail("over a URL: the terminal's own link at that very cell, no path", mo);
+  await mouse(line.indexOf("plan.md"), true);
+  await u.shows("Ctrl+click opened docs/plan.md from console1's folder", (x) => x.opened === `file://${plan}`);
+  await mouse(line.indexOf("nope.md"), true);
+  await Bun.sleep(500);
+  if ((await u.list()).opened !== `file://${plan}`) fail("a path that is not there opens nothing");
+}
 // show/hide: off the view, the consoles live on; back without a new one
 run("host.consoles");
 await u.shows("the panel off demo", (x) => dock(x).visible === false && dock(x).count === 2);

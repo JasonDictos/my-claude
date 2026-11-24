@@ -252,6 +252,8 @@ tests/gui-demo.sh          # try it in a sandbox: temp HOME, fake claude, privat
   the window, as it does with its X; the consoles live on (in tmux, `my-claude-consoles`).
   Pinned, the panel stays, over every project. The list has one Consoles entry per machine,
   each console under it: a click goes to it, **F2** renames it.
+- **Paths in panes:** a path under the mouse is underlined; Ctrl+click opens it from the
+  pane's folder (or its repo's), in its desktop app; another machine's over sftp.
 - **It opens as you left it:** the project in front, the pane with the keyboard, zoomed and
   minimised panes, the consoles' panel (kept in `~/.config/my-claude/mc-term.conf`).
 - **The overview** (`Meta+Shift+W`): every open terminal at once, live; click one to go there.
