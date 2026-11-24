@@ -51,5 +51,6 @@ export function selectionLines(source: string, selection: string): [number, numb
 
 export function reviewMessage(path: string, lines: [number, number] | null, selection: string, question: string): string {
   const where = !lines ? path : lines[0] === lines[1] ? `${path}:${lines[0]}` : `${path}:${lines[0]}-${lines[1]}`;
-  return [`[review] ${where}`, ...selection.split("\n").map((l) => `> ${l}`), question].join("\n");
+  // nothing selected: a question about the plan as a whole
+  return [`[review] ${where}`, ...(selection ? selection.split("\n").map((l) => `> ${l}`) : []), question].join("\n");
 }

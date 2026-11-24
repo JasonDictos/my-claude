@@ -531,6 +531,54 @@ u.send({ op: "tab", tab: "demo", focus: true });
 await u.shows("back over demo", (x) => x.current === "demo" && x.plans[0].visible);
 u.send({ op: "plan-close", id: r1.id });
 await u.shows("closed", (x) => !x.plans?.length);
+// review end to end: asked for from inside r1, a question lands in r1's pane, an edit reloads
+{
+  const plan = join(tmp, "r1/docs/plan.md");
+  mkdirSync(dirname(plan), { recursive: true }); writeFileSync(plan, "# Plan\n\n## Task 3\n\n- One **reactor** per disk\n");
+  const review = (p: string) => Bun.spawnSync(["bun", join(root, "src/cli.ts"), "review", p], { cwd: join(tmp, "r1"), env: { ...process.env, MY_CLAUDE_PROJECT: "demo", MY_CLAUDE_PEER: "r1" } });
+  const waitScreen = async (id: string, has: string, what: string) => {
+    for (let i = 0; i < 100; i++) { if ((await screenOf(id)).includes(has)) return; await Bun.sleep(100); }
+    fail(what, await screenOf(id));
+  };
+  u.send({ op: "tab", tab: "second-one", focus: true });
+  await u.shows("second-one in front", (x) => x.current === "second-one");
+  review("docs/plan.md");
+  await u.shows("the plan over r1, demo brought to the front", (x) => x.current === "demo" && x.plans?.some((p: any) => p.id === r1.id && p.path === "docs/plan.md" && p.visible), 20000);
+  u.send({ op: "plan-select", id: r1.id, text: "reactor per disk" });
+  for (const c of "why?") await key(c);
+  await key("Return");
+  await waitScreen(r1.id, "[review] docs/plan.md:5", "the question should land in r1's pane, with the line");
+  writeFileSync(plan, "# Plan\n\n- Two reactors\n");
+  await u.shows("the agent's edit shown", (x) => x.plans?.[0]?.text.includes("Two reactors"), 20000);
+  mkdirSync(join(tmp, "r1/docs2"), { recursive: true }); writeFileSync(join(tmp, "r1/docs2/other.md"), "# Other\n");
+  review("docs2/other.md");
+  await u.shows("a second plan replaces the first", (x) => x.plans?.length === 1 && x.plans[0].path === "docs2/other.md", 20000);
+  u.send({ op: "plan-close", id: r1.id });
+  await u.shows("closed", (x) => !x.plans?.length);
+  // a request for a path the driver cannot read (another filesystem): no panel, the request used up
+  mkdirSync(join(root, "projects/demo/.review"), { recursive: true });
+  writeFileSync(join(root, "projects/demo/.review/r1"), join(tmp, "r1/not-here.md"));
+  for (let i = 0; i < 60 && existsSync(join(root, "projects/demo/.review/r1")); i++) await Bun.sleep(100);
+  await Bun.sleep(300);
+  if (existsSync(join(root, "projects/demo/.review/r1")) || (await u.list()).plans?.length) fail("an unreadable plan should be said, not shown or left waiting");
+  // Ctrl+click on a .md path in r1's pane: the plan panel, not the desktop app
+  const before = (await u.list()).opened;
+  u.send({ op: "send", id: r1.id, text: " docs/plan.md" });
+  let row = -1, col = -1, scr = "";
+  for (let i = 0; i < 60 && row < 0; i++) {
+    scr = await screenOf(r1.id);
+    const lines = scr.split("\n");
+    for (let k = lines.length - 1; k >= 0 && row < 0; k--) if (lines[k].endsWith(" docs/plan.md")) { row = k; col = lines[k].lastIndexOf("plan.md"); }
+    if (row < 0) await Bun.sleep(100);
+  }
+  if (row < 0) fail("docs/plan.md should be on r1's screen", scr);
+  u.send({ op: "mouse", id: r1.id, row, col, click: true });
+  await u.until("moused");
+  await u.shows("Ctrl+click on a plan opened its panel", (x) => x.plans?.some((p: any) => p.id === r1.id && p.path === "docs/plan.md"), 20000);
+  if ((await u.list()).opened !== before) fail("a .md in an agent's pane should open in the panel, not the desktop app");
+  u.send({ op: "plan-close", id: r1.id });
+  await u.shows("closed again", (x) => !x.plans?.length);
+}
 // --- more panes than fit: a shell on demo's second screen is still on screen on coming back
 u.send({ op: "look", perGroup: 2 });
 u.send({ op: "focus", id: l.terminals.find((t: any) => t.tab === "demo" && t.title === "r1").id });

@@ -4,11 +4,12 @@
 // true to the projects and does what it asks. It owns no session, so a crash here costs nothing.
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, symlinkSync, writeFileSync, rmSync } from "node:fs";
 import { homedir, hostname } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { stat } from "node:fs/promises";
+import { dirname, join, relative, resolve } from "node:path";
+import { readFile, stat } from "node:fs/promises";
 import * as core from "./core.ts";
 import * as tmux from "./tmux.ts";
 import * as consoles from "./consoles.ts";
+import * as review from "./review.ts";
 import { attention, attentionMark, clearAttention, type Attention } from "./attention.ts";
 import { COLOR_CHOICES, PALETTE } from "./colors.ts";
 import { defaultSocket, hostAlive, hostLink, hostSend, type HostLink } from "./host.ts";
@@ -334,6 +335,8 @@ class Driver {
   private pendingTab: string | null = null;
   // projects being set up (undelete cloning their repos): greyed, their repos animated until done
   private settingUp = new Set<string>();
+  // plans shown over an agent's pane, by its term id: the file, and when it was last sent
+  private plans = new Map<string, { name: string; repo: string; path: string; mtime: number }>();
   private asks = new Map<string, (v: Dict | null) => void>();
   private askSeq = 0;
   private lists: ((l: Dict) => void)[] = [];
@@ -531,6 +534,7 @@ class Driver {
       { id: "host.settings", label: "Settings", icon: "settings" }] });
     this.sendIfChanged("settings", { op: "settings", ...this.settingsSpec() });
     this.sendIfChanged("placeholder", { op: "placeholder", text: snaps.length ? "No project open.\n\nPick one in the Projects list (Enter or a double-click starts it),\nor my-claude → New project." : "No projects yet.\n\nmy-claude → New project  (or press n in the Projects list)" });
+    await this.reviewLook(snaps);
     this.alerts(snaps);
 
     if (this.pendingTab && this.shown.has(this.pendingTab)) {
@@ -987,6 +991,8 @@ class Driver {
         if (String(ev.id ?? "").startsWith(`${consoles.TAB}/`)) void this.consoleRename(String(ev.id).slice(consoles.TAB.length + 1), String(ev.name ?? "")).catch((e) => this.fail(e, "rename"));
         else void this.onRename(String(ev.node ?? ""), String(ev.name ?? "")).catch((e) => this.fail(e, "rename"));
         break;
+      case "plan-ask": void this.planAsk(String(ev.id ?? ""), String(ev.selection ?? ""), String(ev.question ?? "")).catch((e) => this.fail(e, "review")); break;
+      case "plan-closed": this.plans.delete(String(ev.id ?? "")); break;
       case "open-path": void this.openPath(String(ev.id ?? ""), String(ev.path ?? "")).catch((e) => this.fail(e, "open")); break;
       case "settings": try { this.saveSettings(ev.values ?? {}); } catch (e) { this.fail(e, "settings"); } break;
       case "settings-open": this.send({ op: "settings", ...this.settingsSpec(), open: true }); break;
@@ -1080,9 +1086,48 @@ class Driver {
     const repo = this.snap(name)?.peers.find((x) => x.repo === this.byPane(name, pane).repo)?.path;
     for (const dir of [here, repo].filter((d): d is string => !!d)) {
       const abs = resolve(dir, path);
-      if (await stat(abs).then(() => true, () => false)) { this.send({ op: "browse", path: abs }); return; }
+      if (!(await stat(abs).then(() => true, () => false))) continue;
+      // a plan in an agent's pane opens over it, to ask about; anything else in its desktop app
+      const agent = this.byPane(name, pane).repo;
+      if (/\.md$/i.test(abs) && agent && this.snap(name)?.peers.some((x) => x.repo === agent)) return this.openPlan(name, agent, abs);
+      this.send({ op: "browse", path: abs });
+      return;
     }
     this.notify(`no ${path} in ${tilde(here || homedir())}`, { error: true });
+  }
+
+  // ---- plan review: an agent's plan over its pane, the user's questions into its prompt
+
+  // Requests agents left (my-claude review), and the open plans they have changed since.
+  private async reviewLook(snaps: core.ProjectSnap[]): Promise<void> {
+    for (const s of snaps) for (const r of await review.takeReviewRequests(s.project.name)) await this.openPlan(s.project.name, r.repo, r.path);
+    for (const pl of [...this.plans.values()]) {
+      const mtime = await stat(pl.path).then((x) => x.mtimeMs, () => 0);
+      if (mtime && mtime !== pl.mtime) await this.openPlan(pl.name, pl.repo, pl.path, false);
+    }
+  }
+
+  // Over the agent's pane, its project in front (not for a reload); a second plan replaces it.
+  private async openPlan(name: string, repo: string, abs: string, front = true): Promise<void> {
+    const peer = this.snap(name)?.peers.find((x) => x.repo === repo);
+    if (!peer?.pane) return this.notify(`${repo} is not running: no pane to show its plan over`, { error: true });
+    const [text, st] = await Promise.all([readFile(abs, "utf8").catch(() => null), stat(abs).catch(() => null)]);
+    if (text === null || !st) return this.notify(`no ${abs} here (${repo}'s plan is in its own filesystem?)`, { error: true });
+    const id = `${name}/${peer.pane}`;
+    this.plans.set(id, { name, repo, path: abs, mtime: st.mtimeMs });
+    this.send({ op: "plan", id, tab: name, path: this.planPath(peer.path, abs), agent: repo, text });
+    if (front) this.show(name);
+  }
+  private planPath = (repo: string, abs: string) => { const r = relative(repo, abs); return r.startsWith("..") ? abs : r; };
+
+  // The user's question about a passage: typed into the agent's prompt, quoting it, with its lines.
+  private async planAsk(id: string, selection: string, question: string): Promise<void> {
+    const pl = this.plans.get(id);
+    const peer = pl && this.snap(pl.name)?.peers.find((x) => x.repo === pl.repo);
+    if (!pl || !peer) return;
+    const source = await readFile(pl.path, "utf8").catch(() => "");
+    const lines = selection ? review.selectionLines(source, selection) : null;
+    await tmux.paste(split2(id)[1], review.reviewMessage(this.planPath(peer.path, pl.path), lines, selection, question));
   }
 
   // A name typed over an entry (F2): its display name, the default again when emptied.

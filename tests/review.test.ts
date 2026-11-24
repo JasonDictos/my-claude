@@ -14,3 +14,4 @@ test("text that is not there has no lines", () => expect(selectionLines(src, "no
 test("the block the agent gets", () => expect(reviewMessage("docs/plan.md", [5, 6], "One reactor per disk\nio_uring engine", "why per disk?")).toBe("[review] docs/plan.md:5-6\n> One reactor per disk\n> io_uring engine\nwhy per disk?"));
 test("one line, no range", () => expect(reviewMessage("docs/plan.md", [5, 5], "One reactor", "why?")).toBe("[review] docs/plan.md:5\n> One reactor\nwhy?"));
 test("no lines found: the path alone", () => expect(reviewMessage("docs/plan.md", null, "x", "why?")).toBe("[review] docs/plan.md\n> x\nwhy?"));
+test("nothing selected: the question about the plan as a whole", () => expect(reviewMessage("docs/plan.md", null, "", "ready?")).toBe("[review] docs/plan.md\nready?"));
